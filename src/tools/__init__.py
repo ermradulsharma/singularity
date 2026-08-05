@@ -1,0 +1,1 @@
+# AGI Standard Library Initialization

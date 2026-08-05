@@ -1,0 +1,32 @@
+# GPT Model Configuration
+model:
+  n_embd: 128     
+  n_head: 4
+  n_kv_head: 2          
+  n_layer: 4
+  block_size: 1024      # [AGI UPGRADE] Increased for Infini-Attention / Images
+  num_experts: 4        
+  num_experts_per_tok: 2 
+  dropout: 0.2
+  
+  # Omni-Modality Settings
+  vision:
+    image_size: 224
+    patch_size: 16
+    in_channels: 3
+  dropout: 0.2
+
+# Training Configuration
+training:
+  batch_size: 16
+  learning_rate: 0.0003
+  max_iters: 1000
+  eval_interval: 10
+  eval_iters: 20
+  accumulation_steps: 4  # Gradient Accumulation
+  device: "cuda"
+
+# Data Paths
+paths:
+  hf_dataset_name: "data/processed/omni_science.jsonl" 
+  model_save: "models/gpt_finetuned.pth"
