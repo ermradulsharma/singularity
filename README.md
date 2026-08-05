@@ -1,4 +1,6 @@
-![Singularity AGI Banner](assets/singularity_banner.png)
+<div align="center">
+  <img src="assets/singularity_banner.png" alt="Singularity AGI Banner" height="250" />
+</div>
 
 *"We do not build to replicate; we build to assimilate and evolve."*
 
