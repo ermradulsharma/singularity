@@ -1,0 +1,30 @@
+name: base
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - pytorch
+  - torchvision
+  - numpy
+  - pandas
+  - pyyaml
+  - scikit-learn
+  - matplotlib
+  - tqdm
+  - scipy
+  - pip
+  - pip:
+    - datasets
+    - tiktoken
+    - fastapi
+    - uvicorn
+    - z3-solver
+    - yfinance
+    - playwright
+    - huggingface-hub
+    - pydantic
+    - transformers
+    - accelerate
+    - safetensors
