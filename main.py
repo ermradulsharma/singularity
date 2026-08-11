@@ -230,14 +230,29 @@ def inference_mode(task: str):
     # 1. Assimilate Tools
     assimilate_tools()
     
-    # 2. Run Swarm
+    # 2. Dynamic Expert Spawning
     from src.swarm import orchestrate_swarm
+    from src.inference import generate_text
     import pprint
+    import ast
     
     print(f"\n[USER] Task: {task}")
-    print("[SYSTEM] Dispatching Swarm Agents...\n")
+    print("[SYSTEM] Analyzing task to dynamically spawn specialized agents...\n")
     
-    results = orchestrate_swarm(task, ["Quant", "Cyber_Sec"])
+    # Ask the base AGI to determine the best roles
+    role_prompt = f"Analyze the following task and return a Python list of exactly 2 expert roles (strings) best suited to solve it. Output ONLY the list, nothing else.\nTask: {task}"
+    try:
+        roles_str = generate_text(role_prompt).strip()
+        # Parse the string into a python list safely
+        roles = ast.literal_eval(roles_str)
+        if not isinstance(roles, list) or len(roles) == 0:
+            roles = ["Logical_Reasoner", "Code_Expert"]
+    except Exception:
+        roles = ["Logical_Reasoner", "Code_Expert"]
+        
+    print(f"[SYSTEM] Dispatching Swarm Agents: {roles}\n")
+    
+    results = orchestrate_swarm(task, roles)
     print("\n" + "="*60)
     print("[SYSTEM] Final Swarm Evaluation:")
     pprint.pprint(results)

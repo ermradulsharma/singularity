@@ -6,7 +6,7 @@ from src.tools.recon_engine import UnrestrictedAgentReconEngine
 async def _async_agent_loop(role: str, task_description: str, session, router):
     from src.inference import generate_text
     
-    max_steps = 5
+    max_steps = 15
     for step in range(max_steps):
         # 1. BRAIN GENERATES TOOL CALL (OR FINAL ANSWER)
         prompt_context = session.get_formatted_history()
@@ -26,7 +26,11 @@ async def _async_agent_loop(role: str, task_description: str, session, router):
             code_blocks = re.findall(r'```python\n(.*?)\n```', llm_response, re.DOTALL)
             if code_blocks:
                 sandbox = SecureSandbox(use_docker=True)
-                sandbox_output = "\n[SANDBOX EXECUTION RESULT]\n" + sandbox.execute(code_blocks[0])
+                try:
+                    out = sandbox.execute(code_blocks[0])
+                    sandbox_output = "\n[SANDBOX EXECUTION RESULT]\n" + out
+                except Exception as e:
+                    sandbox_output = f"\n[SANDBOX ERROR]\n{e}\nAnalyze the error, correct your code, and try again."
         
         if tool_result["tool_called"] or sandbox_output:
             observation = tool_result.get("observation", "") + sandbox_output
@@ -54,6 +58,19 @@ def sub_agent_task(role: str, task_description: str, return_dict: dict, lock):
     
     # 🧠 LONG-TERM MEMORY INJECTION
     past_context = search_memory(task_description)
+    
+    # Strict ReAct System Prompt
+    react_system_prompt = f"""You are a specialized Swarm Agent with the role: {role}.
+You operate in a strict ReAct (Reason + Act) loop. To solve the problem, you MUST follow this EXACT format:
+Thought: Detail your reasoning step-by-step. What do you need to calculate or verify?
+Code: Write python code inside a ```python block to calculate your thought. The code will execute in a secure sandbox.
+Observation: (Wait for the system to provide the output of your code).
+... (Repeat until you solve the problem)
+Final Answer: Provide the mathematically/logically proven solution.
+
+NEVER assume a final answer without verifying it via Code first. If you get a [SANDBOX ERROR], analyze it, fix your code, and try again."""
+    session.add_message("system", react_system_prompt)
+    
     enhanced_task = f"Past Long-Term Knowledge:\n{past_context}\n\nCurrent Task:\n{task_description}"
     
     session.add_message("user", enhanced_task)

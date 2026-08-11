@@ -71,24 +71,15 @@ class AGIInferenceEngine:
                 except Exception as e:
                     print(f"[WARNING] Failed to load brain '{brain_path}': {e}")
                     
-        # Load correct tokenizer from LOCAL storage (Offline Mode)
+        # Load correct tokenizer from LOCAL storage (Offline Mode - Strict Sovereignty)
+        import tiktoken
         try:
             from transformers import AutoTokenizer
             if os.path.exists("models/tokenizer_config.json"):
-                self.enc = AutoTokenizer.from_pretrained("models/")
+                self.enc = AutoTokenizer.from_pretrained("models/", local_files_only=True)
             else:
-                # Fallback to loading dynamically if local files are missing
-                if loaded_brain and "smollm" in loaded_brain:
-                    self.enc = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
-                elif loaded_brain and "tinyllama" in loaded_brain:
-                    self.enc = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
-                elif loaded_brain and "deepseek" in loaded_brain:
-                    self.enc = AutoTokenizer.from_pretrained("deepseek-ai/deepseek-coder-6.7b-base")
-                else:
-                    self.enc = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
+                raise ValueError("No local tokenizer found. Enforcing offline sovereignty.")
         except Exception as e:
-            print(f"[WARNING] Tokenizer load failed, falling back to GPT-2: {e}")
-            import tiktoken
             self.enc = tiktoken.get_encoding("gpt2")
                     
         if not weights_loaded:
@@ -99,7 +90,10 @@ class AGIInferenceEngine:
         """
         Passes the prompt through the Neural Network using KV-Cache.
         """
-        tokens = self.enc.encode(prompt, add_special_tokens=True)
+        try:
+            tokens = self.enc.encode(prompt, add_special_tokens=True)
+        except TypeError:
+            tokens = self.enc.encode(prompt)
         if len(tokens) > self.config.block_size - max_new_tokens:
             tokens = tokens[-(self.config.block_size - max_new_tokens):]
         idx = torch.tensor([tokens], dtype=torch.long).to(self.device)
@@ -133,7 +127,10 @@ class AGIInferenceEngine:
                 if hasattr(self.enc, 'eos_token_id') and idx_next.item() == self.enc.eos_token_id:
                     break
                     
-            generated_text = self.enc.decode(generated_ids, skip_special_tokens=True)
+            try:
+                generated_text = self.enc.decode(generated_ids, skip_special_tokens=True)
+            except TypeError:
+                generated_text = self.enc.decode(generated_ids)
             return generated_text
 
 # Global singleton to prevent reloading model into GPU multiple times
