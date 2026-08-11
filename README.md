@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/singularity_banner.png" alt="Singularity AGI Banner" width="100%" height="350" />
+  <img src="assets/singularity_banner.png" alt="Singularity AGI Banner" width="100%" height="500" />
 </div>
 
 *"We do not build to replicate; we build to assimilate and evolve."*
