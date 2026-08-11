@@ -42,24 +42,13 @@ if __name__ == "__main__":
     print("============================================================")
     print("[*] AGI AUTONOMOUS KNOWLEDGE EXTRACTOR (Raw Tensors & Data) [*]")
     print("============================================================")
-    print("1. Extract Phi-4-mini (3.8B) - Math & Logic")
-    print("2. Extract Qwen3-4B / Qwen2.5-3B - Multilingual & Coding")
-    print("3. Extract Llama 3.2 (3B) - Broad Knowledge")
-    print("4. Extract Gemma 3 / Gemma 2 (2B) - Google's Multimodal")
-    print("5. Extract Custom Model (Enter HuggingFace ID)")
     
-    choice = input("Enter choice (1-5): ")
-    
-    if choice == '1':
-        extract_raw_weights("microsoft/Phi-3-mini-4k-instruct") # Nearest equivalent for testing
-    elif choice == '2':
-        extract_raw_weights("Qwen/Qwen2.5-3B-Instruct")
-    elif choice == '3':
-        extract_raw_weights("meta-llama/Llama-3.2-3B-Instruct")
-    elif choice == '4':
-        extract_raw_weights("google/gemma-2-2b-it")
-    elif choice == '5':
-        custom_id = input("Enter HuggingFace Model ID (e.g. HuggingFaceTB/SmolLM-135M): ")
+    if len(sys.argv) > 1:
+        custom_id = sys.argv[1]
+    else:
+        custom_id = input("Enter HuggingFace Model ID (e.g. Qwen/Qwen2.5-1.5B): ")
+        
+    if custom_id and custom_id.strip():
         extract_raw_weights(custom_id.strip())
     else:
-        print("Invalid choice. Exiting.")
+        print("[ERROR] No Model ID provided. Exiting.")
