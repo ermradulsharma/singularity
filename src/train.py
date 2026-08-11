@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+import safetensors.torch
 from torch.utils.data import Dataset, DataLoader
 from inference import ModelArgs, AGIInferenceEngine
 from model import GPTLanguageModel
@@ -106,9 +107,9 @@ def train_agi():
             if step >= 100: # Break early for demo
                 break
                 
-    save_path = "models/smollm_agi_evolved.pt"
+    save_path = "models/smollm_agi_evolved.safetensors"
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(model.state_dict(), save_path)
+    safetensors.torch.save_file(model.state_dict(), save_path)
     
     print("============================================================")
     print("[SUCCESS] Evolution Complete! AGI is now smarter.")

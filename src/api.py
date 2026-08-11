@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 import tiktoken
 import sys
+import safetensors.torch
 
 # Ensure src module is importable when running from root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,7 +49,7 @@ async def startup_event():
     # 3. Load Trained Weights
     model_path = config['paths']['model_save']
     if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.load_state_dict(safetensors.torch.load_file(model_path, device=str(device)))
     else:
         pass
     model.to(device)

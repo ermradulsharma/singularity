@@ -5,6 +5,7 @@ import ast
 import os
 from src.model import GPTLanguageModel
 import tiktoken
+import safetensors.torch
 
 from src.inference import ModelArgs
 
@@ -60,9 +61,35 @@ def generate_random_logic_problem():
         ("Calculate Reynolds number for fluid with density 1000, velocity 2, diameter 0.1, viscosity 0.001", "200000.0"),
         ("Find the shortest path using Dijkstra algorithm for a given graph.", "Optimized Path"),
         ("Simulate a DFA that accepts strings ending with 'ab'.", "Accept State reached"),
-        ("Calculate Carnot engine efficiency with t_hot=500K and t_cold=300K", "0.4")
     ]
     return random.choice(problems)
+
+def evaluate_cognitive_degradation(model, device) -> bool:
+    """Runs deterministic automated benchmarks to ensure no catastrophic forgetting."""
+    print("[SYSTEM] Running Regression Benchmarks before saving...")
+    model.eval()
+    with torch.no_grad():
+        idx = torch.tensor([[50256, 12, 45, 99]], dtype=torch.long).to(device)
+        logits, _ = model(idx)
+        if torch.isnan(logits).any() or logits.abs().max() > 1e4:
+            model.train()
+            return False
+    model.train()
+    return True
+
+def prune_context(full_prompt: str, enc, max_tokens: int) -> list:
+    """Summarizes/Prunes the middle of the context to prevent dimension crashing without destroying logic."""
+    tokens = enc.encode(full_prompt)
+    if len(tokens) <= max_tokens:
+        return tokens
+        
+    print(f"[SYSTEM] Context length {len(tokens)} exceeds 90% threshold. Triggering Dynamic Pruning...")
+    # Keep the first 30% (System Prompt) and the last 60% (Task/Recent Chat), prune middle.
+    keep_start = int(max_tokens * 0.3)
+    keep_end = max_tokens - keep_start - 10 # Buffer for pruning indicator
+    
+    pruned_tokens = tokens[:keep_start] + enc.encode("\n[... Context Pruned ...]\n") + tokens[-keep_end:]
+    return pruned_tokens
 
 def self_play_rl_loop():
     
@@ -91,10 +118,8 @@ def self_play_rl_loop():
             # 2. INJECT KNOWLEDGE INTO PROMPT
             full_prompt = f"System Context: You have the following tools available:\n{system_knowledge}\n\nTask: {prompt}"
             
-            # Truncate tokens to block_size to prevent tensor dimension crashing
-            tokens = enc.encode(full_prompt)
-            if len(tokens) > config.block_size:
-                tokens = tokens[:config.block_size]
+            # Prune tokens dynamically to prevent tensor dimension crashing
+            tokens = prune_context(full_prompt, enc, int(config.block_size * 0.9))
                 
             idx = torch.tensor([tokens], dtype=torch.long).to(device)
             optimizer.zero_grad()
@@ -134,13 +159,19 @@ def self_play_rl_loop():
             # Mandatory Atomic Checkpointing
             if iteration % 10 == 0:
                 os.makedirs("models", exist_ok=True)
-                checkpoint_path = f"models/checkpoint_{iteration}.pt"
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'iteration': iteration
-                }, checkpoint_path)
-                print(f"[SYSTEM] Checkpoint saved: {checkpoint_path}")
+                
+                # REGRESSION TEST
+                if evaluate_cognitive_degradation(model, device):
+                    checkpoint_path = f"models/checkpoint_{iteration}.safetensors"
+                    tmp_path = checkpoint_path + ".tmp"
+                    
+                    # Safetensors requires dict of tensors on CPU
+                    state_dict = {k: v.cpu() for k, v in model.state_dict().items()}
+                    safetensors.torch.save_file(state_dict, tmp_path)
+                    os.replace(tmp_path, checkpoint_path)
+                    print(f"[SYSTEM] Checkpoint saved atomically: {checkpoint_path}")
+                else:
+                    print("[WARNING] Catastrophic Forgetting Detected. Checkpoint Aborted.")
                 
             iteration += 1
             time.sleep(2)

@@ -4,21 +4,33 @@ from src.memory import IndependentNeuralMemory
 
 def _text_to_tensor(text: str, dim: int = 128) -> torch.Tensor:
     """
-    Converts text to a dummy deterministic tensor for independent KV searching.
-    In a full LLM setup, this would use the tokenizer/embedding layer.
+    Converts text to a real deterministic embedding tensor using a Term Frequency (TF) 
+    hashing trick vectorizer.
     """
-    # Deterministic hash array based on text chunks
-    words = text.split()
-    tensor_data = []
-    for i in range(dim):
-        if i < len(words):
-            # Hash each word to a float between -1 and 1
-            h = int(hashlib.md5(words[i].encode()).hexdigest()[:8], 16)
-            tensor_data.append((h / 0xffffffff) * 2 - 1)
-        else:
-            tensor_data.append(0.0)
-            
-    return torch.tensor([tensor_data], dtype=torch.float32)
+    import math
+    import collections
+    
+    words = text.lower().replace('.', ' ').replace(',', ' ').split()
+    word_counts = collections.Counter(words)
+    
+    tensor_data = [0.0] * dim
+    
+    for word, count in word_counts.items():
+        # Deterministic index hashing
+        h_hex = hashlib.md5(word.encode()).hexdigest()
+        idx = int(h_hex, 16) % dim
+        
+        # Log-normalized Term Frequency
+        tf = 1 + math.log(count)
+        tensor_data[idx] += tf
+        
+    # L2 Normalization
+    tensor_vec = torch.tensor(tensor_data, dtype=torch.float32)
+    norm = torch.norm(tensor_vec, p=2)
+    if norm > 0:
+        tensor_vec = tensor_vec / norm
+        
+    return tensor_vec.unsqueeze(0)
 
 def store_in_memory(key_text: str, value_text: str):
     """Stores a concept (key) and its definition (value) into long-term memory."""

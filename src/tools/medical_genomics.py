@@ -23,17 +23,27 @@ class Bio_Genetics_AI:
             "risk_level": "High" if len(mutations) > 3 else "Low"
         }
 
-    def simulate_crispr_edit(self, target_sequence: str, guide_rna: str, replacement: str):
+    def execute_crispr_edit(self, target_dna: str, guide_rna: str, replacement_dna: str):
         """
-        Simulates a CRISPR-Cas9 genome edit.
+        Executes a programmatic CRISPR-Cas9 genome edit by verifying the NGG PAM sequence.
         """
-        if guide_rna not in target_sequence:
-            return {"status": "Failed", "reason": "Guide RNA sequence not found in target."}
+        import re
+        
+        # In real biology, the Cas9 enzyme binds to a specific PAM sequence (NGG)
+        # The guide RNA must match the sequence just upstream of the PAM.
+        pam_pattern = re.compile(f"({guide_rna})[ACGT]GG")
+        match = pam_pattern.search(target_dna)
+        
+        if not match:
+            return {"status": "Failed", "reason": "Valid CRISPR/Cas9 NGG PAM sequence not found downstream of the guide RNA."}
             
-        edited_sequence = target_sequence.replace(guide_rna, replacement)
+        cut_site = match.end(1)
+        
+        edited_sequence = target_dna[:match.start(1)] + replacement_dna + target_dna[cut_site:]
         return {
             "status": "Success",
-            "original_sequence": target_sequence,
+            "original_sequence": target_dna,
             "edited_sequence": edited_sequence,
-            "edit_location": target_sequence.find(guide_rna)
+            "edit_start_index": match.start(1),
+            "pam_sequence": target_dna[cut_site:cut_site+3]
         }

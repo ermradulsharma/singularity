@@ -5,6 +5,7 @@ from src.model import GPTLanguageModel
 
 import os
 import json
+import safetensors.torch
 
 class ModelArgs:
     vocab_size = 50257 + 6
@@ -24,7 +25,7 @@ class ModelArgs:
             try:
                 with open("models/config.json", "r") as f:
                     config = json.load(f)
-                self.vocab_size = max(50257, config.get("vocab_size", self.vocab_size))
+                self.vocab_size = max(50263, config.get("vocab_size", self.vocab_size))
                 self.n_embd = config.get("n_embd", self.n_embd)
                 self.n_head = config.get("n_head", self.n_head)
                 self.n_kv_head = config.get("n_kv_head", self.n_kv_head)
@@ -47,7 +48,7 @@ class AGIInferenceEngine:
             intermediate_size=self.config.intermediate_size
         ).to(self.device)
         # Attempt to load ported weights from the Neural Weight Porter
-        possible_brains = ["models/smollm_agi.pt", "models/tinyllama_agi.pt", "models/uncensored_agi.pt", "models/llama3_agi.pt", "models/deepseek_agi.pt"]
+        possible_brains = ["models/smollm_agi.safetensors", "models/tinyllama_agi.safetensors", "models/uncensored_agi.safetensors", "models/llama3_agi.safetensors", "models/deepseek_agi.safetensors"]
         weights_loaded = False
         loaded_brain = None
         
@@ -56,7 +57,7 @@ class AGIInferenceEngine:
                 try:
                     print(f"[SYSTEM] Loading Pre-Trained Brain: {brain_path}...")
                     # Load on CPU first to prevent VRAM spikes, then the model handles device placement
-                    state_dict = torch.load(brain_path, map_location=self.device)
+                    state_dict = safetensors.torch.load_file(brain_path, device="cpu")
                     load_result = self.model.load_state_dict(state_dict, strict=False)
                     print(f"[DEBUG] Missing keys: {len(load_result.missing_keys)}")
                     if len(load_result.missing_keys) > 0:

@@ -1,26 +1,28 @@
-import math
-import cmath
+import numpy as np
 
 class Quantum_Physicist:
     """Agent specialized in Quantum Mechanics, Qubit simulations, and Wave-function analysis."""
     
-    def simulate_qubit_superposition(self, alpha_squared: float):
-        """
-        Simulates the state of a single qubit in superposition.
-        alpha_squared is the probability of measuring |0>.
-        """
-        if not (0 <= alpha_squared <= 1):
-            return "Error: Probability must be between 0 and 1."
-            
-        beta_squared = 1.0 - alpha_squared
-        alpha = math.sqrt(alpha_squared)
-        beta = math.sqrt(beta_squared)
+    def apply_hadamard_gate(self, alpha: float, beta: float):
+        """Applies a real Hadamard quantum gate matrix to a state vector [alpha, beta]."""
+        state = np.array([alpha, beta])
+        norm = np.linalg.norm(state)
+        if norm == 0:
+            return "Error: Invalid state vector."
+        state = state / norm
+        
+        # Real Hadamard Matrix
+        H = (1 / np.sqrt(2)) * np.array([[1, 1], [1, -1]])
+        new_state = np.dot(H, state)
+        
+        prob_0 = np.abs(new_state[0])**2
+        prob_1 = np.abs(new_state[1])**2
         
         return {
-            "state_vector": f"{alpha:.4f}|0⟩ + {beta:.4f}|1⟩",
-            "prob_0": f"{alpha_squared * 100:.2f}%",
-            "prob_1": f"{beta_squared * 100:.2f}%",
-            "observation": "Quantum state is in superposition until measured."
+            "initial_state": [float(state[0]), float(state[1])],
+            "new_state_vector": [float(new_state[0]), float(new_state[1])],
+            "prob_0": f"{prob_0 * 100:.2f}%",
+            "prob_1": f"{prob_1 * 100:.2f}%"
         }
 
     def solve_schrodinger_1d_box(self, n: int, L: float):

@@ -232,7 +232,35 @@ class UnrestrictedAgentReconEngine:
         return " | ".join(results) if results else "No GitHub repos found."
 
     # -------------------------------------------------------------
-    # TIER 5: AUTONOMOUS ROUTER (Smart Fallback Execution)
+    # TIER 5: NETWORK SCANNING (Active TCP Recon)
+    # -------------------------------------------------------------
+    def scan_ports(self, target_ip: str, ports: list = [21, 22, 80, 443, 3306, 8080]) -> str:
+        """
+        Executes a real TCP connect scan against the target IP.
+        """
+        import socket
+        import concurrent.futures
+        
+        open_ports = []
+        
+        def scan_single_port(port):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                result = s.connect_ex((target_ip, port))
+                if result == 0:
+                    open_ports.append(port)
+                    
+        print(f"[RECON_ENGINE] Initiating real TCP port scan on {target_ip}...")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            executor.map(scan_single_port, ports)
+            
+        if open_ports:
+            return f"Open ports found on {target_ip}: {sorted(open_ports)}"
+        return f"No open ports detected on {target_ip} (Filtered or Down)."
+
+    # -------------------------------------------------------------
+    # TIER 6: AUTONOMOUS ROUTER (Smart Fallback Execution)
     # -------------------------------------------------------------
     def autonomous_search(self, query: str) -> str:
         """
