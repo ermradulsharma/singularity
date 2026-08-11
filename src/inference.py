@@ -133,10 +133,29 @@ class AGIInferenceEngine:
                 generated_text = self.enc.decode(generated_ids)
             return generated_text
 
+    def load_variant(self, variant_name: str):
+        """Dynamically loads and swaps a LoRA Adapter without clearing base VRAM."""
+        if not variant_name: return
+        import os
+        adapter_path = f"models/{variant_name}_adapter.safetensors"
+        self.model.inject_lora_adapters(variant_name)
+        if os.path.exists(adapter_path):
+            try:
+                import safetensors.torch
+                print(f"[SYSTEM] Swapping LoRA Weights: {variant_name}...")
+                state_dict = safetensors.torch.load_file(adapter_path, device=self.device)
+                self.model.load_state_dict(state_dict, strict=False)
+            except Exception as e:
+                print(f"[WARNING] Failed to load adapter {adapter_path}: {e}")
+        else:
+            print(f"[SYSTEM] Note: Adapter '{variant_name}' not found locally. Proceeding with blank initialized adapter.")
+
 # Global singleton to prevent reloading model into GPU multiple times
 _engine = None
-def generate_text(prompt: str) -> str:
+def generate_text(prompt: str, variant: str = None) -> str:
     global _engine
     if _engine is None:
         _engine = AGIInferenceEngine()
+    if variant:
+        _engine.load_variant(variant)
     return _engine.generate_response(prompt)

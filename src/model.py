@@ -16,6 +16,21 @@ def apply_rotary_emb(x, freqs_cis):
     cos, sin = freqs_cis.cos().view(1, x.shape[1], 1, -1), freqs_cis.sin().view(1, x.shape[1], 1, -1)
     return (x * cos) + (rotated * sin)
 
+class LoRALinear(nn.Module):
+    """Low-Rank Adaptation (LoRA) layer for memory-efficient Neural Variants."""
+    def __init__(self, linear_layer: nn.Linear, r: int = 8, alpha: int = 16):
+        super().__init__()
+        self.linear = linear_layer
+        self.r = r
+        self.scaling = alpha / r
+        self.lora_A = nn.Parameter(torch.zeros(linear_layer.in_features, r))
+        self.lora_B = nn.Parameter(torch.zeros(r, linear_layer.out_features))
+        nn.init.normal_(self.lora_A, std=0.02)
+        nn.init.zeros_(self.lora_B)
+
+    def forward(self, x):
+        return self.linear(x) + (x @ self.lora_A @ self.lora_B) * self.scaling
+
 class UniversalDynamicBlock(nn.Module):
     """
     Dynamically routes tensors through Dense, GQA, or MoE layers algorithmically.
@@ -126,6 +141,15 @@ class GPTLanguageModel(nn.Module):
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def inject_lora_adapters(self, variant_name: str, r: int = 8, alpha: int = 16):
+        """Dynamically injects LoRA into Q and V layers for a specific Swarm Agent variant."""
+        print(f"[SYSTEM] Injecting LoRA Neural Adapter: {variant_name}")
+        for block in self.graph['blocks']:
+            if not isinstance(block.graph['attn']['wq'], LoRALinear):
+                block.graph['attn']['wq'] = LoRALinear(block.graph['attn']['wq'], r, alpha).to(self.graph['tok_emb'].weight.device)
+            if not isinstance(block.graph['attn']['wv'], LoRALinear):
+                block.graph['attn']['wv'] = LoRALinear(block.graph['attn']['wv'], r, alpha).to(self.graph['tok_emb'].weight.device)
 
     def _load_sub_brains(self, n_embd):
         import importlib, os

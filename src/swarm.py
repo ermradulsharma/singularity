@@ -10,7 +10,7 @@ async def _async_agent_loop(role: str, task_description: str, session, router):
     for step in range(max_steps):
         # 1. BRAIN GENERATES TOOL CALL (OR FINAL ANSWER)
         prompt_context = session.get_formatted_history()
-        llm_response = generate_text(prompt_context)
+        llm_response = generate_text(prompt_context, variant=role)
             
         session.add_message("agent", llm_response)
         
