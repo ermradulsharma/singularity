@@ -10,7 +10,7 @@ from model import GPTLanguageModel
 from src.telemetry import logger
 
 # 🚨 STRICT COMPLIANCE OVERRIDE
-def _telemetry_logger.log("INFO", "SYSTEM", str(*args, **kwargs)):
+def _telemetry_print(*args, **kwargs):
     message = " ".join(map(str, args)).replace('=', '').strip()
     if message:
         logger.log("INFO", "TRAIN", message)
