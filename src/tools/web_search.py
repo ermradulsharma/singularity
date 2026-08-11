@@ -3,10 +3,7 @@ import urllib.parse
 import json
 
 def search_wikipedia(query: str, limit: int = 2) -> str:
-    """
-    Independent Web Search using Wikipedia's public open API.
-    Provides agents with real-world knowledge on demand.
-    """
+    """Independent Web Search using Wikipedia's public open API. Provides agents with real-world knowledge on demand."""
     encoded_query = urllib.parse.quote(query)
     url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&utf8=&format=json"
     

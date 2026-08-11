@@ -3,10 +3,7 @@ import hashlib
 from src.memory import IndependentNeuralMemory
 
 def _text_to_tensor(text: str, dim: int = 128) -> torch.Tensor:
-    """
-    Converts text to a real deterministic embedding tensor using a Term Frequency (TF) 
-    hashing trick vectorizer.
-    """
+    """Converts text to a real deterministic embedding tensor using a Term Frequency (TF) hashing trick vectorizer."""
     import math
     import collections
     

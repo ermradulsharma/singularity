@@ -1,3 +1,4 @@
+from src.telemetry import logger
 import torch
 import tiktoken
 import sys

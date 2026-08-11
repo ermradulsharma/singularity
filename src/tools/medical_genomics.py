@@ -2,9 +2,7 @@ class Bio_Genetics_AI:
     """Agent specialized in DNA sequence analysis, Genomics, and Pathology Diagnostics."""
     
     def analyze_dna_mutation(self, reference_dna: str, patient_dna: str):
-        """
-        Compares a patient's DNA sequence to a reference sequence to find point mutations.
-        """
+        """Compares a patient's DNA sequence to a reference sequence to find point mutations."""
         if len(reference_dna) != len(patient_dna):
             return "Error: Sequences must be of the same length for simple point mutation analysis."
             
@@ -24,9 +22,7 @@ class Bio_Genetics_AI:
         }
 
     def execute_crispr_edit(self, target_dna: str, guide_rna: str, replacement_dna: str):
-        """
-        Executes a programmatic CRISPR-Cas9 genome edit by verifying the NGG PAM sequence.
-        """
+        """Executes a programmatic CRISPR-Cas9 genome edit by verifying the NGG PAM sequence."""
         import re
         
         # In real biology, the Cas9 enzyme binds to a specific PAM sequence (NGG)

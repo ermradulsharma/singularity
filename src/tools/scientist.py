@@ -2,10 +2,7 @@ import os
 import ast
 
 def create_future_tech_tool(technology_name: str, python_code: str) -> str:
-    """
-    FUTURE TECH SCIENTIST ENGINE:
-    Generates a brand new logic engine (tool) for a new scientific domain or technology.
-    """
+    """FUTURE TECH SCIENTIST ENGINE: Generates a brand new logic engine (tool) for a new scientific domain or technology."""
     filename = f"{technology_name.lower().replace(' ', '_')}.py"
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     filepath = os.path.join(tools_dir, filename)

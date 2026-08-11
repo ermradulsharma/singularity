@@ -17,11 +17,7 @@ def reverse_complement_dna(dna_sequence: str) -> str:
     return dna_sequence.translate(complement_map)[::-1]
 
 def calculate_molecular_weight(formula: str) -> float:
-    """
-    Calculates the molecular weight of a simple chemical formula.
-    Supports symbols and counts, e.g., 'H2O', 'CO2', 'C6H12O6'.
-    (Does not support nested parentheses in this basic version).
-    """
+    """Calculates the molecular weight of a simple chemical formula. Supports symbols and counts, e.g., 'H2O', 'CO2', 'C6H12O6'. (Does not support nested parentheses in this basic version)."""
     import re
     weight = 0.0
     # Matches an Element symbol followed optionally by a number

@@ -8,10 +8,7 @@ except ImportError:
     SecureSandbox = None
 
 def run_python_code(code_str: str, use_docker: bool = True) -> str:
-    """
-    Executes a block of Python code securely inside the Swarm's Sandbox.
-    Useful for testing algorithms, running complex calculations, or data parsing.
-    """
+    """Executes a block of Python code securely inside the Swarm's Sandbox. Useful for testing algorithms, running complex calculations, or data parsing."""
     if not SecureSandbox:
         return "[SYSTEM ERROR] SecureSandbox module not found in src.sandbox."
         

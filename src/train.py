@@ -2,9 +2,19 @@ import os
 import json
 import torch
 import safetensors.torch
+import time
+import builtins
 from torch.utils.data import Dataset, DataLoader
 from inference import ModelArgs, AGIInferenceEngine
 from model import GPTLanguageModel
+from src.telemetry import logger
+
+# 🚨 STRICT COMPLIANCE OVERRIDE
+def _telemetry_logger.log("INFO", "SYSTEM", str(*args, **kwargs)):
+    message = " ".join(map(str, args)).replace('=', '').strip()
+    if message:
+        logger.log("INFO", "TRAIN", message)
+builtins.print = _telemetry_print
 
 # ---------------------------------------------------------
 # AGI EVOLUTION ENGINE (Self-Training Loop)

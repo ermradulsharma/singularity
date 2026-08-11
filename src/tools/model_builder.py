@@ -2,10 +2,7 @@ import os
 import ast
 
 def generate_sub_brain(model_name: str, pytorch_code: str) -> str:
-    """
-    Autonomously generates and saves a SubBrain neural adapter to the AGI's architecture.
-    The code must contain a 'class SubBrain(nn.Module):' definition.
-    """
+    """Autonomously generates and saves a SubBrain neural adapter to the AGI's architecture. The code must contain a 'class SubBrain(nn.Module):' definition."""
     # 1. Validation
     if not model_name.isidentifier():
         return "[ERROR] Invalid model_name. Use snake_case, e.g. 'gemini_style'."

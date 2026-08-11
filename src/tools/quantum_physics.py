@@ -26,11 +26,7 @@ class Quantum_Physicist:
         }
 
     def solve_schrodinger_1d_box(self, n: int, L: float):
-        """
-        Calculates the energy of a particle in a 1D box (Infinite potential well).
-        n: Principal quantum number (n >= 1)
-        L: Length of the box (in meters)
-        """
+        """Calculates the energy of a particle in a 1D box (Infinite potential well). n: Principal quantum number (n >= 1) L: Length of the box (in meters)"""
         if n < 1 or L <= 0:
             return "Error: Invalid quantum state or box length."
             

@@ -1,3 +1,4 @@
+from src.telemetry import logger
 import os
 import json
 import urllib.request

@@ -4,12 +4,7 @@ class Astro_Mechanic:
     """Agent specialized in Astrophysics, Orbital Mechanics, and Relativity calculations."""
     
     def calculate_hohmann_transfer(self, r1: float, r2: float, mass_central_body: float):
-        """
-        Calculates the delta-v required for a Hohmann transfer orbit.
-        r1: Radius of initial circular orbit (meters)
-        r2: Radius of target circular orbit (meters)
-        mass_central_body: Mass of the body being orbited (kg)
-        """
+        """Calculates the delta-v required for a Hohmann transfer orbit. r1: Radius of initial circular orbit (meters) r2: Radius of target circular orbit (meters) mass_central_body: Mass of the body being orbited (kg)"""
         G = 6.67430e-11 # Gravitational constant
         mu = G * mass_central_body
         
@@ -39,11 +34,7 @@ class Astro_Mechanic:
         }
 
     def calculate_time_dilation(self, velocity_v: float, time_t: float):
-        """
-        Calculates time dilation based on Special Relativity.
-        velocity_v: Velocity of the moving object (m/s)
-        time_t: Time passed for the stationary observer (seconds)
-        """
+        """Calculates time dilation based on Special Relativity. velocity_v: Velocity of the moving object (m/s) time_t: Time passed for the stationary observer (seconds)"""
         c = 299792458 # Speed of light (m/s)
         if velocity_v >= c:
             return "Error: Velocity cannot exceed or equal the speed of light."

@@ -1,9 +1,7 @@
 import math
 
 def geodesic_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Calculates the precise great-circle distance between two points on Earth using the Haversine formula.
-    """
+    """Calculates the precise great-circle distance between two points on Earth using the Haversine formula."""
     R = 6371.0 # Earth radius in kilometers
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)

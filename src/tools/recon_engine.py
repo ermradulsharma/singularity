@@ -1,3 +1,4 @@
+from src.telemetry import logger
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -235,9 +236,7 @@ class UnrestrictedAgentReconEngine:
     # TIER 5: NETWORK SCANNING (Active TCP Recon)
     # -------------------------------------------------------------
     def scan_ports(self, target_ip: str, ports: list = [21, 22, 80, 443, 3306, 8080]) -> str:
-        """
-        Executes a real TCP connect scan against the target IP.
-        """
+        """Executes a real TCP connect scan against the target IP."""
         import socket
         import concurrent.futures
         
@@ -263,10 +262,7 @@ class UnrestrictedAgentReconEngine:
     # TIER 6: AUTONOMOUS ROUTER (Smart Fallback Execution)
     # -------------------------------------------------------------
     def autonomous_search(self, query: str) -> str:
-        """
-        Main interface for the AI Agent.
-        Tries Web Search first -> Falls back to Knowledge Base if empty/failed.
-        """
+        """Main interface for the AI Agent. Tries Web Search first -> Falls back to Knowledge Base if empty/failed."""
         web_res = self.search_web(query)
         
         # Check if primary engine failed or gave no results

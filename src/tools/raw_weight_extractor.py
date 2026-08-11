@@ -1,3 +1,4 @@
+from src.telemetry import logger
 import os
 import sys
 
@@ -9,10 +10,7 @@ def check_dependencies():
         sys.exit(1)
 
 def extract_raw_weights(model_id: str):
-    """
-    Autonomously downloads the RAW weights, configs, and datasets for a given HuggingFace model.
-    NO architecture translation is performed. The AGI will absorb this data internally later.
-    """
+    """Autonomously downloads the RAW weights, configs, and datasets for a given HuggingFace model. NO architecture translation is performed. The AGI will absorb this data internally later."""
     from huggingface_hub import snapshot_download
     
     # Safe directory name based on model_id

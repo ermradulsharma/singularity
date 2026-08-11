@@ -2,10 +2,7 @@ import os
 import ast
 
 def rewrite_own_code(file_path: str, new_code: str) -> str:
-    """
-    META-EVOLUTION ENGINE:
-    Allows the AGI to rewrite its own source code (e.g. src/model.py).
-    """
+    """META-EVOLUTION ENGINE: Allows the AGI to rewrite its own source code (e.g. src/model.py)."""
     if not os.path.exists(file_path):
         return f"Error: File {file_path} not found."
     

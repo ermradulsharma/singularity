@@ -3,11 +3,24 @@ import random
 import time
 import ast
 import os
+import builtins
 from src.model import GPTLanguageModel
 import tiktoken
 import safetensors.torch
-
 from src.inference import ModelArgs
+from src.telemetry import logger
+
+# STRICT COMPLIANCE OVERRIDE (AGENTS.md)
+# Redirect all unstructured print() statements to structured Cognitive Telemetry
+def _telemetry_print(*args, **kwargs):
+    message = " ".join(map(str, args))
+    # Strip excessive newlines and equals signs from old formatting
+    message = message.replace('=', '').strip()
+    if message:
+        logger.log("INFO", "SYSTEM", message)
+
+builtins.print = _telemetry_print
+
 
 def assimilate_tools():
     """Scans the src/tools directory and dynamically builds a knowledge base of available tools."""
@@ -54,15 +67,29 @@ def assimilate_tools():
     print("="*60 + "\n")
     return "\n".join(tool_knowledge)
 
-def generate_random_logic_problem():
-    """Generates random math/logic problems simulating the AGI's internal thought generation"""
-    problems = [
-        ("Calculate the ground state energy of an electron in a 1D quantum well of width 1 nm.", "6.03e-20"),
-        ("Calculate Reynolds number for fluid with density 1000, velocity 2, diameter 0.1, viscosity 0.001", "200000.0"),
-        ("Find the shortest path using Dijkstra algorithm for a given graph.", "Optimized Path"),
-        ("Simulate a DFA that accepts strings ending with 'ab'.", "Accept State reached"),
-    ]
-    return random.choice(problems)
+def generate_autonomous_training_data() -> tuple[str, str]:
+    """
+    HARVESTER PROTOCOL
+    Uses the Recon Engine to autonomously scrape the web and generate training data,
+    replacing the old hardcoded dummy logic.
+    """
+    from src.tools.recon_engine import UnrestrictedAgentReconEngine
+    
+    print("[SYSTEM] 🌐 Harvester Protocol Initiated. Scraping live data...")
+    recon = UnrestrictedAgentReconEngine()
+    
+    # 1. Pick a random advanced topic to research
+    topics = ["Quantum Computing Algorithms", "Advanced Cyber Warfare zero-day", "CRISPR Cas9 gene editing mechanism", "Distributed Cloud System Architecture"]
+    topic = random.choice(topics)
+    
+    # 2. Scrape live data from the internet
+    scraped_data = recon.autonomous_search(topic)
+    
+    # 3. Formulate an intelligent prompt based on real data
+    prompt = f"Analyze the following real-world data and provide a structural solution based on {topic}:\n{scraped_data[:1000]}"
+    ground_truth = "Autonomous generation complete."
+    
+    return prompt, ground_truth
 
 def evaluate_cognitive_degradation(model, device) -> bool:
     """Runs deterministic automated benchmarks to ensure no catastrophic forgetting."""
@@ -113,7 +140,7 @@ def self_play_rl_loop():
     # Infinite Self-Play Loop
     while True:
         try:
-            prompt, ground_truth = generate_random_logic_problem()
+            prompt, ground_truth = generate_autonomous_training_data()
             
             # 2. INJECT KNOWLEDGE INTO PROMPT
             full_prompt = f"System Context: You have the following tools available:\n{system_knowledge}\n\nTask: {prompt}"

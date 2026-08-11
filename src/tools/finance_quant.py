@@ -7,14 +7,7 @@ def calculate_cagr(start_value: float, end_value: float, years: float) -> float:
     return (math.pow(end_value / start_value, 1 / years) - 1) * 100
 
 def black_scholes_call(S: float, K: float, T: float, r: float, sigma: float) -> float:
-    """
-    Calculates the European Call Option price using Black-Scholes model.
-    S: Current stock price
-    K: Strike price
-    T: Time to expiration (in years)
-    r: Risk-free interest rate (annualized)
-    sigma: Volatility of the stock (annualized)
-    """
+    """Calculates the European Call Option price using Black-Scholes model. S: Current stock price K: Strike price T: Time to expiration (in years) r: Risk-free interest rate (annualized) sigma: Volatility of the stock (annualized)"""
     if T <= 0:
         return max(0.0, S - K)
         
@@ -29,10 +22,6 @@ def black_scholes_call(S: float, K: float, T: float, r: float, sigma: float) -> 
     return call_price
 
 def calculate_npv(rate: float, cash_flows: list) -> float:
-    """
-    Calculates Net Present Value (NPV).
-    rate: discount rate
-    cash_flows: list of cash flows, where index is the period (Year 0, 1, 2...)
-    """
+    """Calculates Net Present Value (NPV). rate: discount rate cash_flows: list of cash flows, where index is the period (Year 0, 1, 2...)"""
     npv = sum(cf / (1 + rate)**i for i, cf in enumerate(cash_flows))
     return npv

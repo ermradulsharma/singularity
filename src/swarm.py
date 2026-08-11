@@ -17,8 +17,19 @@ async def _async_agent_loop(role: str, task_description: str, session, router):
         # 2. PARSE & EXECUTE (Concurrent Action Phase)
         tool_result = await router.parse_and_execute(llm_response)
         
-        if tool_result["tool_called"]:
-            observation = tool_result["observation"]
+        # 🚨 SANDBOX EXECUTION PIPELINE
+        # If the model wrote python code in a markdown block, execute it!
+        sandbox_output = ""
+        if "```python" in llm_response:
+            import re
+            from src.sandbox import SecureSandbox
+            code_blocks = re.findall(r'```python\n(.*?)\n```', llm_response, re.DOTALL)
+            if code_blocks:
+                sandbox = SecureSandbox(use_docker=True)
+                sandbox_output = "\n[SANDBOX EXECUTION RESULT]\n" + sandbox.execute(code_blocks[0])
+        
+        if tool_result["tool_called"] or sandbox_output:
+            observation = tool_result.get("observation", "") + sandbox_output
             
             # 3. SAVE OBSERVATION (Short-Term Memory Phase)
             session.add_message("observation", str(observation)[:2000] + "...")
@@ -36,10 +47,16 @@ def sub_agent_task(role: str, task_description: str, return_dict: dict, lock):
     """Executes a sub-agent process with a specific persona/role using ReAct (Reasoning + Acting)"""
     from src.chat_session import SessionManager
     from src.tool_router import AsyncDynamicToolRouter
+    from src.tools.memory_retriever import search_memory
     
     # Load Short-Term Memory
     session = SessionManager(session_id=role)
-    session.add_message("user", task_description)
+    
+    # 🧠 LONG-TERM MEMORY INJECTION
+    past_context = search_memory(task_description)
+    enhanced_task = f"Past Long-Term Knowledge:\n{past_context}\n\nCurrent Task:\n{task_description}"
+    
+    session.add_message("user", enhanced_task)
     
     router = AsyncDynamicToolRouter()
     
@@ -52,29 +69,24 @@ def sub_agent_task(role: str, task_description: str, return_dict: dict, lock):
 
 def critic_agent_task(task_description: str, generation_results: dict, return_dict: dict, lock):
     """
-    CRITIC AGENT
-    Reviews the outputs from the sub-agents and selects the preferred solution.
+    CRITIC AGENT (LLM-AS-A-JUDGE)
+    Uses the actual LLM to deeply evaluate the logic of the sub-agents and pick a winner.
     """
-    scores = {}
+    from src.inference import generate_text
+    
+    evaluation_prompt = f"Task: {task_description}\n\nEvaluate the following agent responses and select the most mathematically/logically sound approach.\n"
     for role, result in generation_results.items():
-        # Deterministic Evaluation (NO DUMMY CODE)
-        # We penalize errors and termination without solution.
-        score = 100
-        if "Error" in result:
-            score -= 50
-        if "terminated after" in result:
-            score -= 30
-        if "Failed" in result:
-            score -= 40
-        scores[role] = score
+        evaluation_prompt += f"\n--- {role} ---\n{result}\n"
         
-    best_role = max(scores, key=scores.get) if scores else None
+    evaluation_prompt += "\nOutput your final reasoning and state which role won."
+    
+    # Run the actual LLM to evaluate the clones!
+    judge_response = generate_text(evaluation_prompt)
     
     with lock:
         return_dict["critic_evaluation"] = {
-            "scores": scores,
-            "preferred_role": best_role,
-            "feedback": f"Selected {best_role} as the best approach based on structural evaluation."
+            "status": "LLM_JUDGED",
+            "feedback": judge_response
         }
 
 def orchestrate_swarm(task_description: str, roles: list) -> dict:
