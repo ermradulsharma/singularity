@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Copy source code (without transferring host OS secrets)
 COPY src/ /app/src/
-COPY main.py daemon.py /app/
+COPY main.py /app/
 
 # Install strictly necessary dependencies. No network exploitation tools.
 RUN pip install --no-cache-dir torch tiktoken scipy sympy
@@ -17,4 +17,4 @@ RUN useradd -m agi_user
 USER agi_user
 
 # Default command: Run the autonomous background daemon
-CMD ["python", "daemon.py"]
+CMD ["python", "main.py"]
