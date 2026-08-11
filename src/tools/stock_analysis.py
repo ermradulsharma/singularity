@@ -6,10 +6,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class InstitutionalQuantEngine:
-    """
-    Production Quantitative Trading & Backtesting Engine.
-    Includes: Multi-timeframe trend alignment, Risk Sizing, and Strategy Backtester.
-    """
+    """Production Quantitative Trading & Backtesting Engine (Includes Multi-timeframe trend alignment, Risk Sizing, Strategy Backtester)."""
 
     def __init__(self, ticker_symbol: str, benchmark_symbol: str = "^NSEI", portfolio_capital: float = 100000.0):
         self.ticker = ticker_symbol.upper().strip()

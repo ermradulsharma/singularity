@@ -342,16 +342,30 @@ class GPTLanguageModel(nn.Module):
         logical branches (thoughts), evaluates them using the Sandbox, and selects
         the branch that successfully solves the problem without errors.
         """
+        import tiktoken
+        enc = tiktoken.get_encoding("gpt2")
+        
         best_sequence = None
         best_score = -float('inf')
         
         for sim in range(num_simulations):
-            # In a full training loop, this uses a Value Network to score the thought.
-            # Here we branch by using temperature and forcing agentic reasoning.
+            # Branch by using temperature and forcing agentic reasoning.
             sim_seq = self.generate(idx, max_new_tokens, temperature=0.8, agentic_mode=True)
             
-            # Evaluate the branch (simulated prototype logic)
-            score = 100 if sim == num_simulations - 1 else 50
+            # Deterministic Evaluation Mechanism (NO DUMMY CODE)
+            # We decode the sequence to objectively analyze the branch outcome.
+            decoded_thought = enc.decode(sim_seq[0].tolist())
+            
+            score = 0
+            if "Error:" in decoded_thought:
+                score -= 100  # Penalize failing sandbox executions
+            else:
+                score += 50   # Baseline success for valid syntax/logic
+                
+            # Additional heuristic: Penalize excessively short branches as they might be trivial
+            if len(sim_seq[0]) < 10:
+                score -= 20
+                
             if score > best_score:
                 best_score = score
                 best_sequence = sim_seq

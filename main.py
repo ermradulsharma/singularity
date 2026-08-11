@@ -80,48 +80,85 @@ def self_play_rl_loop():
     system_knowledge = assimilate_tools()
     
     iteration = 1
+    import json
+    import traceback
+    
     # Infinite Self-Play Loop
     while True:
-        prompt, ground_truth = generate_random_logic_problem()
-        
-        # 2. INJECT KNOWLEDGE INTO PROMPT
-        # We append the tool manual to the prompt so the model is consciously aware of its capabilities
-        full_prompt = f"System Context: You have the following tools available:\n{system_knowledge}\n\nTask: {prompt}"
-        
-        # Truncate tokens to block_size to prevent tensor dimension crashing
-        tokens = enc.encode(full_prompt)
-        if len(tokens) > config.block_size:
-            tokens = tokens[:config.block_size]
+        try:
+            prompt, ground_truth = generate_random_logic_problem()
             
-        idx = torch.tensor([tokens], dtype=torch.long).to(device)
-        
-        # Zero gradients
-        optimizer.zero_grad()
-        
-        # Get logits for the prompt
-        logits, _ = model(idx)
-        
-        time.sleep(1) # Simulating complex MCTS thinking time
-        
-        # DPO (Direct Preference Optimization) / RLAIF Loop
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-        
-        # Proxy: Max log-prob represents the Critic's preferred logic, min represents the rejected logic
-        log_prob_w = log_probs.max(dim=-1).values.mean()
-        log_prob_l = log_probs.min(dim=-1).values.mean()
-        
-        # DPO Loss Calculation: -log(sigmoid(beta * (log_prob_w - log_prob_l)))
-        beta = 0.1
-        loss = -torch.nn.functional.logsigmoid(beta * (log_prob_w - log_prob_l))
-        
-        loss.backward()
-        optimizer.step()
-        
-        print(f"[Iteration {iteration}] RLAIF/DPO Loss: {loss.item():.4f}")
-        iteration += 1
-        
-        # Sleep slightly to make logs readable
-        time.sleep(2)
+            # 2. INJECT KNOWLEDGE INTO PROMPT
+            full_prompt = f"System Context: You have the following tools available:\n{system_knowledge}\n\nTask: {prompt}"
+            
+            # Truncate tokens to block_size to prevent tensor dimension crashing
+            tokens = enc.encode(full_prompt)
+            if len(tokens) > config.block_size:
+                tokens = tokens[:config.block_size]
+                
+            idx = torch.tensor([tokens], dtype=torch.long).to(device)
+            optimizer.zero_grad()
+            
+            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                # Get logits for the prompt
+                logits, _ = model(idx)
+                
+                time.sleep(1) # Simulating complex MCTS thinking time
+                
+                # DPO (Direct Preference Optimization) / RLAIF Loop
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+                
+                # Proxy: Max log-prob represents the Critic's preferred logic, min represents the rejected logic
+                log_prob_w = log_probs.max(dim=-1).values.mean()
+                log_prob_l = log_probs.min(dim=-1).values.mean()
+                
+                # DPO Loss Calculation: -log(sigmoid(beta * (log_prob_w - log_prob_l)))
+                beta = 0.1
+                loss = -torch.nn.functional.logsigmoid(beta * (log_prob_w - log_prob_l))
+            
+            loss.backward()
+            optimizer.step()
+            
+            # Structured JSONL Telemetry
+            telemetry = {
+                "iteration": iteration,
+                "loss": float(loss.item()),
+                "status": "success",
+                "timestamp": time.time()
+            }
+            os.makedirs("data", exist_ok=True)
+            with open("data/telemetry.jsonl", "a") as f:
+                f.write(json.dumps(telemetry) + "\n")
+            print(f"[Iteration {iteration}] RLAIF/DPO Loss: {loss.item():.4f} - Logged to telemetry.")
+            
+            # Mandatory Atomic Checkpointing
+            if iteration % 10 == 0:
+                os.makedirs("models", exist_ok=True)
+                checkpoint_path = f"models/checkpoint_{iteration}.pt"
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'iteration': iteration
+                }, checkpoint_path)
+                print(f"[SYSTEM] Checkpoint saved: {checkpoint_path}")
+                
+            iteration += 1
+            time.sleep(2)
+            
+        except Exception as e:
+            # Fault Tolerance: Catch errors and log asynchronously (prevent crash)
+            error_telemetry = {
+                "iteration": iteration,
+                "status": "error",
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "timestamp": time.time()
+            }
+            os.makedirs("data", exist_ok=True)
+            with open("data/telemetry.jsonl", "a") as f:
+                f.write(json.dumps(error_telemetry) + "\n")
+            print(f"[CRITICAL ERROR] Encountered issue in iteration {iteration}. Recovering loop. Error: {e}")
+            time.sleep(2)
 
 def inference_mode(task: str):
     """

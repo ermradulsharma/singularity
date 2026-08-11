@@ -38,10 +38,7 @@ def _validate_logic_expression(logic_str: str) -> ast.Expression:
     return tree
 
 def prove_theorem(logic_str: str) -> str:
-    """
-    Evaluates a Z3 logical constraint string.
-    Example logic_str: "z3.Not(z3.And(p, q)) == z3.Or(z3.Not(p), z3.Not(q))"
-    """
+    """Evaluates a Z3 logical constraint string (e.g., "z3.Not(z3.And(p, q)) == z3.Or(z3.Not(p), z3.Not(q))")."""
     try:
         p, q, x, y = z3.Bools('p q x y')
         tree = _validate_logic_expression(logic_str)
