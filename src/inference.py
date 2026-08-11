@@ -24,7 +24,7 @@ class ModelArgs:
             try:
                 with open("models/config.json", "r") as f:
                     config = json.load(f)
-                self.vocab_size = config.get("vocab_size", self.vocab_size)
+                self.vocab_size = max(50257, config.get("vocab_size", self.vocab_size))
                 self.n_embd = config.get("n_embd", self.n_embd)
                 self.n_head = config.get("n_head", self.n_head)
                 self.n_kv_head = config.get("n_kv_head", self.n_kv_head)
