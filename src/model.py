@@ -35,6 +35,20 @@ try:
     import triton
     import triton.language as tl
 
+    @triton.autotune(
+        configs=[
+            # NVIDIA H100 Hopper (SM 9.0+) high-bandwidth block configuration
+            triton.Config({'BLOCK_SIZE': 4096}, num_warps=16, num_stages=5),
+            triton.Config({'BLOCK_SIZE': 2048}, num_warps=8, num_stages=4),
+            # NVIDIA A100 Ampere (SM 8.0) configuration
+            triton.Config({'BLOCK_SIZE': 1024}, num_warps=8, num_stages=3),
+            # NVIDIA RTX 4090 Ada Lovelace (SM 8.9) consumer GPU configuration
+            triton.Config({'BLOCK_SIZE': 512}, num_warps=4, num_stages=2),
+            # Generic CUDA fallback configuration
+            triton.Config({'BLOCK_SIZE': 256}, num_warps=4, num_stages=2),
+        ],
+        key=['N']
+    )
     @triton.jit
     def _triton_rmsnorm_kernel(x_ptr, weight_ptr, out_ptr, stride_x, N, eps: tl.constexpr, BLOCK_SIZE: tl.constexpr):
         row_idx = tl.program_id(0)
