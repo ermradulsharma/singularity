@@ -125,11 +125,18 @@ def self_play_rl_loop():
         config.vocab_size, config.n_embd, config.n_head, config.n_kv_head,
         config.n_layer, config.block_size, config.num_experts, config.num_experts_per_tok
     ).to(device)
+    
+    import copy
+    ref_model = copy.deepcopy(model).to(device)
+    ref_model.eval()
+    for param in ref_model.parameters():
+        param.requires_grad = False
+        
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     enc = tiktoken.get_encoding("gpt2")
     
     from src.prm import StepProcessRewardModel
-    prm = StepProcessRewardModel(d_model=config.n_embd).to(device)
+    prm = StepProcessRewardModel(vocab_size=config.vocab_size, d_model=config.n_embd).to(device)
     
     system_knowledge = assimilate_tools()
     
@@ -138,6 +145,8 @@ def self_play_rl_loop():
     import traceback
     
     group_size = 4
+    clip_eps = 0.2
+    kl_beta = 0.04
     
     while True:
         try:
@@ -150,28 +159,65 @@ def self_play_rl_loop():
             optimizer.zero_grad()
             
             rollout_rewards = []
-            rollout_losses = []
+            rollouts = []
+            old_log_probs_list = []
+            prompt_len = idx.size(1)
             
-            with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                logits, loss_base = model(idx)
-                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-                
-                for r in range(group_size):
-                    with torch.no_grad():
-                        sample_ids = model.generate(idx, max_new_tokens=32, temperature=0.8, agentic_mode=False)
-                        sample_text = enc.decode(sample_ids[0].tolist())
+            for r in range(group_size):
+                with torch.no_grad():
+                    sample_ids = model.generate(idx, max_new_tokens=32, temperature=0.8, agentic_mode=False)
+                    sample_text = enc.decode(sample_ids[0].tolist())
                     
-                    prm_score = prm.score_reasoning_steps([sample_text])[0]
-                    exec_reward = 1.0 if "```python" in sample_text and "Error" not in sample_text else 0.2
-                    total_reward = prm_score + exec_reward
-                    rollout_rewards.append(total_reward)
+                    old_logits, _ = model(sample_ids)
+                    old_lprobs = torch.nn.functional.log_softmax(old_logits[:, :-1, :], dim=-1)
+                    target_tokens = sample_ids[:, 1:]
+                    token_old_lprobs = old_lprobs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+                    old_log_probs_list.append(token_old_lprobs[:, max(0, prompt_len - 1):].detach())
                 
-                rewards_tensor = torch.tensor(rollout_rewards, dtype=torch.float32, device=device)
-                mean_r = rewards_tensor.mean()
-                std_r = rewards_tensor.std(unbiased=False) + 1e-8
-                advantages = (rewards_tensor - mean_r) / std_r
-                
-                grpo_loss = - (advantages.mean() * log_probs.max(dim=-1).values.mean()) + loss_base * 0.1
+                prm_score = prm.score_reasoning_steps([sample_text])[0]
+                exec_reward = 1.0 if "```python" in sample_text and "Error" not in sample_text else 0.2
+                total_reward = prm_score + exec_reward
+                rollout_rewards.append(total_reward)
+                rollouts.append(sample_ids)
+            
+            rewards_tensor = torch.tensor(rollout_rewards, dtype=torch.float32, device=device)
+            mean_r = rewards_tensor.mean()
+            std_r = rewards_tensor.std(unbiased=False) + 1e-8
+            advantages = (rewards_tensor - mean_r) / std_r
+            
+            grpo_loss = torch.tensor(0.0, device=device)
+            kl_loss_total = torch.tensor(0.0, device=device)
+            
+            with torch.autocast(device_type='cuda' if 'cuda' in str(device) else 'cpu', dtype=torch.bfloat16):
+                for r_idx, sample_ids in enumerate(rollouts):
+                    r_logits, _ = model(sample_ids)
+                    r_log_probs = torch.nn.functional.log_softmax(r_logits[:, :-1, :], dim=-1)
+                    target_tokens = sample_ids[:, 1:]
+                    token_log_probs = r_log_probs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+                    gen_log_probs = token_log_probs[:, max(0, prompt_len - 1):]
+                    
+                    with torch.no_grad():
+                        ref_logits, _ = ref_model(sample_ids)
+                        ref_lprobs = torch.nn.functional.log_softmax(ref_logits[:, :-1, :], dim=-1)
+                        ref_token_lprobs = ref_lprobs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)[:, max(0, prompt_len - 1):]
+                    
+                    if gen_log_probs.size(1) > 0:
+                        old_lp = old_log_probs_list[r_idx]
+                        ratio = torch.exp(gen_log_probs - old_lp)
+                        surr1 = ratio * advantages[r_idx]
+                        surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages[r_idx]
+                        policy_surr = torch.min(surr1, surr2).mean()
+                        
+                        # DeepSeek-R1 Unbiased KL Divergence Estimator: exp(ref - theta) - (ref - theta) - 1
+                        log_ratio = ref_token_lprobs - gen_log_probs
+                        kl_penalty = (torch.exp(log_ratio) - log_ratio - 1.0).mean()
+                        
+                        loss_sample = -policy_surr + kl_beta * kl_penalty
+                        grpo_loss = grpo_loss + loss_sample
+                        kl_loss_total = kl_loss_total + kl_penalty
+                        
+                grpo_loss = grpo_loss / group_size
+                kl_loss_total = kl_loss_total / group_size
             
             grpo_loss.backward()
             optimizer.step()
@@ -179,6 +225,7 @@ def self_play_rl_loop():
             telemetry = {
                 "iteration": iteration,
                 "grpo_loss": float(grpo_loss.item()),
+                "kl_penalty": float(kl_loss_total.item()),
                 "mean_reward": float(mean_r.item()),
                 "std_reward": float(std_r.item()),
                 "status": "success",
@@ -187,7 +234,7 @@ def self_play_rl_loop():
             os.makedirs("data", exist_ok=True)
             with open("data/telemetry.jsonl", "a") as f:
                 f.write(json.dumps(telemetry) + "\n")
-            print(f"[Iteration {iteration}] GRPO RL Loss: {grpo_loss.item():.4f} | Mean Reward: {mean_r.item():.4f} - Logged.")
+            print(f"[Iteration {iteration}] DeepSeek-R1 GRPO Loss: {grpo_loss.item():.4f} | KL: {kl_loss_total.item():.4f} | Mean Reward: {mean_r.item():.4f} - Logged.")
             
             if iteration % 10 == 0:
                 os.makedirs("models", exist_ok=True)

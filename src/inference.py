@@ -9,12 +9,12 @@ import json
 import safetensors.torch
 
 class ModelArgs:
-    vocab_size = 50257 + 6
+    vocab_size = 128256
     n_embd = 128
     n_head = 4
     n_kv_head = 2
     n_layer = 2
-    block_size = 512
+    block_size = 4096
     num_experts = 2
     num_experts_per_tok = 1
     dropout = 0.0
@@ -37,6 +37,38 @@ class ModelArgs:
             except Exception as e:
                 print(f"[WARNING] Failed to load models/config.json: {e}")
 
+def remap_state_dict(raw_state_dict: dict) -> dict:
+    """Remaps standard HuggingFace / Llama checkpoint keys to internal GPTLanguageModel topology."""
+    remapped = {}
+    key_mappings = {
+        "model.embed_tokens.weight": "graph.tok_emb.weight",
+        "embed_tokens.weight": "graph.tok_emb.weight",
+        "model.norm.weight": "graph.ln_f.weight",
+        "lm_head.weight": "graph.lm_head.weight",
+    }
+    for k, v in raw_state_dict.items():
+        if k in key_mappings:
+            remapped[key_mappings[k]] = v
+        elif k.startswith("model.layers."):
+            parts = k.split(".")
+            layer_idx = parts[2]
+            rest = ".".join(parts[3:])
+            sub_map = {
+                "input_layernorm.weight": f"graph.blocks.{layer_idx}.graph.norm1.weight",
+                "post_attention_layernorm.weight": f"graph.blocks.{layer_idx}.graph.norm2.weight",
+                "self_attn.q_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wq.weight",
+                "self_attn.k_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wk.weight",
+                "self_attn.v_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wv.weight",
+                "self_attn.o_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wo.weight",
+            }
+            if rest in sub_map:
+                remapped[sub_map[rest]] = v
+            else:
+                remapped[k] = v
+        else:
+            remapped[k] = v
+    return remapped
+
 class AGIInferenceEngine:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -56,11 +88,12 @@ class AGIInferenceEngine:
                 try:
                     print(f"[SYSTEM] Loading Pre-Trained Brain: {brain_path}...")
                     state_dict = safetensors.torch.load_file(brain_path, device="cpu")
-                    load_result = self.model.load_state_dict(state_dict, strict=False)
+                    remapped_dict = remap_state_dict(state_dict)
+                    load_result = self.model.load_state_dict(remapped_dict, strict=False)
+                    print(f"[DEBUG] Loaded keys count: {len(remapped_dict)}")
                     print(f"[DEBUG] Missing keys: {len(load_result.missing_keys)}")
-                    if len(load_result.missing_keys) > 0:
-                        print(f"[DEBUG] First 10 missing keys: {load_result.missing_keys[:10]}")
-                    print(f"[DEBUG] Unexpected keys: {len(load_result.unexpected_keys)}")
+                    if len(load_result.missing_keys) > 0 and len(load_result.missing_keys) < 20:
+                        print(f"[DEBUG] Missing keys: {load_result.missing_keys}")
                     print("[SYSTEM] Brain Neural Transfer Complete! AGI is now conscious.")
                     weights_loaded = True
                     loaded_brain = brain_path
@@ -81,12 +114,15 @@ class AGIInferenceEngine:
             if os.path.exists("models/tokenizer_config.json"):
                 self.enc = AutoTokenizer.from_pretrained("models/", local_files_only=True)
             else:
-                raise ValueError("No local tokenizer found. Enforcing offline sovereignty.")
+                raise ValueError("No local HF tokenizer found.")
         except Exception:
             try:
-                self.enc = tiktoken.get_encoding("cl100k_base")
+                self.enc = tiktoken.get_encoding("o200k_base")
             except Exception:
-                self.enc = tiktoken.get_encoding("gpt2")
+                try:
+                    self.enc = tiktoken.get_encoding("cl100k_base")
+                except Exception:
+                    self.enc = tiktoken.get_encoding("gpt2")
                     
         if not weights_loaded:
             print("[WARNING] No Pre-Trained Weights found. Running in Untrained/Mock Hybrid Mode.")

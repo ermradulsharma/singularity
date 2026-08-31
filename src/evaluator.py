@@ -39,18 +39,29 @@ def promote_best_checkpoint(models_dir: str = "models") -> str:
         
     best_score = -1.0
     best_ckpt = None
+
+    from src.inference import AGIInferenceEngine
+    
+    try:
+        engine = AGIInferenceEngine()
+    except Exception as e:
+        return f"[EVALUATOR] Failed to initialize engine: {e}"
     
     for ckpt in checkpoints:
         filepath = os.path.join(models_dir, ckpt)
         try:
-            tensors = safetensors.torch.load_file(filepath)
-            num_tensors = len(tensors)
+            state_dict = safetensors.torch.load_file(filepath)
+            engine.model.load_state_dict(state_dict, strict=False)
             
-            sample_code = "def solve():\n    return 42\nprint(solve())"
-            he_score = evaluate_humaneval_sample(sample_code)
-            gsm_score = evaluate_gsm8k_sample("42", "42")
+            # Dynamic HumanEval test
+            code_gen = engine.generate_response("Write python code: def add(a, b): return a + b", max_new_tokens=40)
+            he_score = evaluate_humaneval_sample(code_gen)
             
-            total_score = (he_score * 0.5) + (gsm_score * 0.5) + (min(num_tensors, 100) * 0.001)
+            # Dynamic GSM8K test
+            math_gen = engine.generate_response("What is 15 + 27?", max_new_tokens=20)
+            gsm_score = evaluate_gsm8k_sample(math_gen, "42")
+            
+            total_score = (he_score * 0.5) + (gsm_score * 0.5)
             
             if total_score > best_score:
                 best_score = total_score

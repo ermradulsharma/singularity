@@ -35,20 +35,22 @@ class AGIDataset(Dataset):
             prompt = f"Instruction: {instruction}\nInput: {input_text}\nAnswer: {output}"
             tokens = tokenizer.encode(prompt, add_special_tokens=True)
             
+            eos_id = getattr(tokenizer, 'eos_token_id', 50256) or 50256
             if len(tokens) > max_length:
                 tokens = tokens[:max_length]
-            elif len(tokens) < max_length:
-                tokens = tokens + [tokenizer.eos_token_id] * (max_length - len(tokens))
+                labels = tokens[1:] + [-100]
+            else:
+                pad_len = max_length - len(tokens)
+                labels = tokens[1:] + [eos_id] + [-100] * (pad_len - 1)
+                tokens = tokens + [eos_id] * pad_len
                 
-            self.examples.append(torch.tensor(tokens, dtype=torch.long))
+            self.examples.append((torch.tensor(tokens[:-1], dtype=torch.long), torch.tensor(labels[:-1], dtype=torch.long)))
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, idx):
-        x = self.examples[idx][:-1]
-        y = self.examples[idx][1:]
-        return x, y
+        return self.examples[idx]
 
 def train_agi():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -81,7 +83,7 @@ def train_agi():
     accumulation_steps = 4
     
     print("============================================================")
-    print("🧬 AGI EVOLUTION STARTED (AMP + Grad Accumulation) 🧬")
+    print("🧬 AGI EVOLUTION STARTED (AMP + Grad Accumulation + Medusa Loss) 🧬")
     print("============================================================")
     
     epochs = 1
@@ -90,10 +92,18 @@ def train_agi():
             x, y = x.to(device), y.to(device)
             
             with torch.amp.autocast(device_type='cuda' if 'cuda' in str(device) else 'cpu'):
-                logits, loss, _ = model(x, targets=y)
-                loss = loss / accumulation_steps
+                logits, loss, medusa_logits = model(x, targets=y, return_medusa=True)
+                medusa_loss = 0.0
+                for k, m_logits in enumerate(medusa_logits):
+                    if y.size(1) > k + 1:
+                        m_target = y[:, k+1:]
+                        m_pred = m_logits[:, :-(k+1), :]
+                        medusa_loss += torch.nn.functional.cross_entropy(
+                            m_pred.reshape(-1, m_pred.size(-1)), m_target.reshape(-1), ignore_index=-100
+                        )
+                total_loss = (loss + 0.1 * medusa_loss) / accumulation_steps
             
-            scaler.scale(loss).backward()
+            scaler.scale(total_loss).backward()
             
             if (step + 1) % accumulation_steps == 0:
                 scaler.unscale_(optimizer)
@@ -117,11 +127,49 @@ def train_agi():
     print(f"[SUCCESS] Upgraded Brain saved to: {save_path}")
     print("============================================================")
 
+def generate_deepspeed_config(stage: int = 3, batch_size: int = 2) -> dict:
+    """Generates DeepSpeed Stage 3 3D Parallelism configuration for multi-node cluster scaling."""
+    return {
+        "train_micro_batch_size_per_gpu": batch_size,
+        "gradient_accumulation_steps": 4,
+        "zero_optimization": {
+            "stage": stage,
+            "offload_optimizer": {"device": "cpu", "pin_memory": True},
+            "offload_param": {"device": "cpu", "pin_memory": True},
+            "overlap_comm": True,
+            "contiguous_gradients": True,
+            "sub_group_size": 1e9,
+            "reduce_bucket_size": "auto",
+            "stage3_prefetch_bucket_size": "auto",
+            "stage3_param_persistence_threshold": "auto"
+        },
+        "bf16": {"enabled": True},
+        "gradient_clipping": 1.0
+    }
+
 def setup_fsdp_model(model: torch.nn.Module, rank: int = 0, world_size: int = 1):
-    """Wraps PyTorch model in FSDP (Fully Sharded Data Parallel) for 100% multi-GPU cluster scale parity."""
+    """Wraps PyTorch model in FSDP (Fully Sharded Data Parallel) with bfloat16 Mixed Precision & Transformer Wrap Policy."""
     if world_size > 1 and torch.cuda.is_available():
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-        return FSDP(model.to(rank))
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision, CPUOffload
+        from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+        from functools import partial
+        from src.model import UniversalDynamicBlock
+        
+        mp_policy = MixedPrecision(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.bfloat16,
+            buffer_dtype=torch.bfloat16,
+        )
+        auto_wrap_policy = partial(
+            transformer_auto_wrap_policy,
+            transformer_layer_cls={UniversalDynamicBlock},
+        )
+        return FSDP(
+            model.to(rank),
+            auto_wrap_policy=auto_wrap_policy,
+            mixed_precision=mp_policy,
+            device_id=torch.cuda.current_device() if torch.cuda.is_available() else None
+        )
     return model
 
 if __name__ == "__main__":

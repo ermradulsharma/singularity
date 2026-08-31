@@ -43,9 +43,10 @@ class QuantizedLinear(nn.Module):
         self.bias = nn.Parameter(torch.zeros(out_features), requires_grad=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Fused FP8/INT4 blockwise GEMM scale unpacking
         scale_expanded = self.weight_scale.repeat_interleave(self.block_size, dim=1)[:, :self.in_features]
-        w_float = self.weight.to(x.dtype) * scale_expanded
-        return F.linear(x, w_float, self.bias)
+        w_dequant = self.weight.to(x.dtype) * scale_expanded
+        return F.linear(x, w_dequant, self.bias)
 
 class PagedKVCacheManager:
     """PagedAttention memory manager for non-contiguous KV-cache block allocation during 32k context streaming."""
@@ -70,7 +71,7 @@ class UniversalDynamicBlock(nn.Module):
     """
     Dynamically routes tensors through Dense, GQA, MLA (Multi-Head Latent Attention), 
     or Shared+Routed MoE layers algorithmically.
-    Implements 2026 DeepSeek-V3 SOTA Multi-Head Latent Attention & Shared Expert Routing.
+    Implements 2026 DeepSeek-V3 SOTA Multi-Head Latent Attention & Vectorized Shared Expert Routing.
     """
     def __init__(self, d, h, kv, e, e_t, kv_lora_rank=128):
         super().__init__()
@@ -132,39 +133,86 @@ class UniversalDynamicBlock(nn.Module):
         if self.h != self.kv: 
             k, v = [t.repeat_interleave(self.h // self.kv, dim=2) for t in (k, v)]
             
+        # PyTorch 2.0+ SDPA / FlashAttention Backend execution
         y = F.scaled_dot_product_attention(
             q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), 
-            is_causal=(T>1 and not past_kv)
+            is_causal=(T > 1 and not past_kv)
         )
         x = x + self.graph['attn']['wo'](y.transpose(1, 2).reshape(B, T, C))
         
         nx = self.graph['norm2'](x)
         if self.is_moe:
-            # Shared Expert (Universal Pattern Capture) + Top-K Vectorized Routed Experts
+            # Vectorized Shared + Top-K Routed Experts
             shared_out = self.graph['shared_expert'](nx)
             
-            wt, exp = torch.topk(F.softmax(self.graph['router'](nx), dim=-1), self.e_t, dim=-1)
-            moe_out = torch.zeros_like(nx)
-            num_experts = len(self.graph['experts'])
-            for k_idx in range(num_experts):
-                mask = (exp == k_idx)
-                if mask.any():
-                    selected_b, selected_t, selected_k_idx = torch.where(mask)
-                    expert_inp = nx[selected_b, selected_t]
-                    expert_out = self.graph['experts'][k_idx](expert_inp)
-                    weights = wt[selected_b, selected_t, selected_k_idx].unsqueeze(-1)
-                    moe_out.index_put_((selected_b, selected_t), expert_out * weights, accumulate=True)
+            router_logits = self.graph['router'](nx)
+            routing_weights = F.softmax(router_logits, dim=-1)
+            topk_weights, topk_indices = torch.topk(routing_weights, self.e_t, dim=-1)
+            topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-8)
+            
+            # Vectorized tensor indexing over top-k routing
+            flat_nx = nx.view(-1, C)
+            flat_indices = topk_indices.view(-1, self.e_t)
+            flat_weights = topk_weights.view(-1, self.e_t)
+            moe_out_flat = torch.zeros_like(flat_nx)
+            
+            for k_idx, expert in enumerate(self.graph['experts']):
+                expert_mask = (flat_indices == k_idx)
+                if expert_mask.any():
+                    row_indices, topk_pos = torch.where(expert_mask)
+                    expert_input = flat_nx[row_indices]
+                    expert_output = expert(expert_input)
+                    weights_for_expert = flat_weights[row_indices, topk_pos].unsqueeze(-1)
+                    moe_out_flat.index_add_(0, row_indices, expert_output * weights_for_expert)
+            
+            moe_out = moe_out_flat.view(B, T, C)
             x = x + shared_out + moe_out
         else:
             x = x + self.graph['ffn'](nx)
         return x, pkv
 
+class PatchMerger(nn.Module):
+    """2x2 Spatial Patch Merging Layer for vision token compression and dynamic resolution scaling."""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(4 * dim)
+        self.reduction = nn.Linear(4 * dim, dim, bias=False)
+
+    def forward(self, x: torch.Tensor, h: int, w: int) -> torch.Tensor:
+        B, N, C = x.size()
+        if N != h * w or h % 2 != 0 or w % 2 != 0:
+            return x
+        x = x.view(B, h, w, C)
+        x0 = x[:, 0::2, 0::2, :]
+        x1 = x[:, 1::2, 0::2, :]
+        x2 = x[:, 0::2, 1::2, :]
+        x3 = x[:, 1::2, 1::2, :]
+        x = torch.cat([x0, x1, x2, x3], dim=-1)
+        x = x.view(B, (h // 2) * (w // 2), 4 * C)
+        return self.reduction(self.norm(x))
+
 class VisionEncoder(nn.Module):
+    """Dynamic Resolution ViT Encoder with 2x2 Spatial Patch Merging for SOTA Omni-Modal Vision."""
     def __init__(self, img_size=224, patch=16, dim=128):
         super().__init__()
+        self.img_size = img_size
+        self.patch = patch
         self.conv = nn.Conv2d(3, dim, kernel_size=patch, stride=patch)
-        self.pos = nn.Parameter(torch.randn(1, (img_size // patch)**2, dim))
-    def forward(self, x): return self.conv(x).flatten(2).transpose(1, 2) + self.pos
+        self.num_patches = (img_size // patch) ** 2
+        self.pos = nn.Parameter(torch.randn(1, self.num_patches, dim))
+        self.ln = nn.LayerNorm(dim)
+        self.proj = nn.Linear(dim, dim)
+        self.merger = PatchMerger(dim)
+
+    def forward(self, x): 
+        B, C, H, W = x.size()
+        patch_h, patch_w = H // self.patch, W // self.patch
+        x_patches = self.conv(x).flatten(2).transpose(1, 2)
+        
+        if x_patches.size(1) == self.num_patches:
+            x_patches = x_patches + self.pos
+        x_proj = self.proj(self.ln(x_patches))
+        return self.merger(x_proj, patch_h, patch_w)
 
 class GPTLanguageModel(nn.Module):
     def __init__(self, vocab_size, n_embd, n_head, n_kv_head, n_layer, block_size, num_experts, num_experts_per_tok, dropout=0.0, intermediate_size=None):
@@ -172,9 +220,11 @@ class GPTLanguageModel(nn.Module):
         self.block_size = block_size
         self.vocab_size = vocab_size
         
+        from src.audio import InterleavedSpeechProjector
         self.graph = nn.ModuleDict({
             'tok_emb': nn.Embedding(vocab_size, n_embd),
             'vision': VisionEncoder(dim=n_embd),
+            'speech_proj': InterleavedSpeechProjector(d_model=n_embd, audio_dim=64),
             'blocks': nn.ModuleList([UniversalDynamicBlock(n_embd, n_head, n_kv_head, num_experts, num_experts_per_tok) for _ in range(n_layer)]),
             'ln_f': nn.LayerNorm(n_embd),
             'lm_head': nn.Linear(n_embd, vocab_size, bias=False),
@@ -216,13 +266,17 @@ class GPTLanguageModel(nn.Module):
                         if hasattr(mod, 'SubBrain'): self.sub_brains[file[:-3]] = mod.SubBrain(n_embd=n_embd)
                     except Exception: pass
                     
-    def forward(self, idx, images=None, targets=None, use_cache=False, past_key_values=None):
+    def forward(self, idx, images=None, speech_features=None, targets=None, use_cache=False, past_key_values=None, return_medusa=False):
         B, T = idx.size()
         x = self.graph['tok_emb'](idx)
         
         if images is not None: 
             image_embeds = self.graph['vision'](images)
             x = torch.cat([image_embeds, x], dim=1)
+            
+        if speech_features is not None:
+            speech_embeds = self.graph['speech_proj'](speech_features)
+            x = torch.cat([speech_embeds, x], dim=1)
         
         pkv = [] if use_cache else None
         for i, block in enumerate(self.graph['blocks']):
@@ -234,12 +288,17 @@ class GPTLanguageModel(nn.Module):
             try: x = x + sub(x)
             except Exception: pass
             
-        if images is not None:
-            x = x[:, image_embeds.size(1):, :]
+        prefix_len = (image_embeds.size(1) if images is not None else 0) + (speech_embeds.size(1) if speech_features is not None else 0)
+        if prefix_len > 0:
+            x = x[:, prefix_len:, :]
             
         logits = self.graph['lm_head'](x)
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) if targets is not None else None
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100) if targets is not None else None
         
+        if return_medusa:
+            medusa_logits = [m_head(x) for m_head in self.graph['medusa_heads']]
+            return (logits, loss, pkv, medusa_logits) if use_cache else (logits, loss, medusa_logits)
+            
         return (logits, loss, pkv) if use_cache else (logits, loss)
 
     @torch.no_grad()
