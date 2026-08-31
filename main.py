@@ -118,7 +118,6 @@ def prune_context(full_prompt: str, enc, max_tokens: int) -> list:
     return pruned_tokens
 
 def self_play_rl_loop():
-    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     config = ModelArgs()
@@ -129,49 +128,66 @@ def self_play_rl_loop():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     enc = tiktoken.get_encoding("gpt2")
     
+    from src.prm import StepProcessRewardModel
+    prm = StepProcessRewardModel(d_model=config.n_embd).to(device)
+    
     system_knowledge = assimilate_tools()
     
     iteration = 1
     import json
     import traceback
     
+    group_size = 4
+    
     while True:
         try:
             prompt, ground_truth = generate_autonomous_training_data()
             
             full_prompt = f"System Context: You have the following tools available:\n{system_knowledge}\n\nTask: {prompt}"
-            
             tokens = prune_context(full_prompt, enc, int(config.block_size * 0.9))
-                
             idx = torch.tensor([tokens], dtype=torch.long).to(device)
+            
             optimizer.zero_grad()
             
+            rollout_rewards = []
+            rollout_losses = []
+            
             with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                logits, _ = model(idx)
-                
-                time.sleep(1)
-                
+                logits, loss_base = model(idx)
                 log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
                 
-                log_prob_w = log_probs.max(dim=-1).values.mean()
-                log_prob_l = log_probs.min(dim=-1).values.mean()
+                for r in range(group_size):
+                    with torch.no_grad():
+                        sample_ids = model.generate(idx, max_new_tokens=32, temperature=0.8, agentic_mode=False)
+                        sample_text = enc.decode(sample_ids[0].tolist())
+                    
+                    prm_score = prm.score_reasoning_steps([sample_text])[0]
+                    exec_reward = 1.0 if "```python" in sample_text and "Error" not in sample_text else 0.2
+                    total_reward = prm_score + exec_reward
+                    rollout_rewards.append(total_reward)
                 
-                beta = 0.1
-                loss = -torch.nn.functional.logsigmoid(beta * (log_prob_w - log_prob_l))
+                rewards_tensor = torch.tensor(rollout_rewards, dtype=torch.float32, device=device)
+                mean_r = rewards_tensor.mean()
+                std_r = rewards_tensor.std(unbiased=False) + 1e-8
+                advantages = (rewards_tensor - mean_r) / std_r
+                
+                grpo_loss = - (advantages.mean() * log_probs.max(dim=-1).values.mean()) + loss_base * 0.1
             
-            loss.backward()
+            grpo_loss.backward()
             optimizer.step()
             
             telemetry = {
                 "iteration": iteration,
-                "loss": float(loss.item()),
+                "grpo_loss": float(grpo_loss.item()),
+                "mean_reward": float(mean_r.item()),
+                "std_reward": float(std_r.item()),
                 "status": "success",
                 "timestamp": time.time()
             }
             os.makedirs("data", exist_ok=True)
             with open("data/telemetry.jsonl", "a") as f:
                 f.write(json.dumps(telemetry) + "\n")
-            print(f"[Iteration {iteration}] RLAIF/DPO Loss: {loss.item():.4f} - Logged to telemetry.")
+            print(f"[Iteration {iteration}] GRPO RL Loss: {grpo_loss.item():.4f} | Mean Reward: {mean_r.item():.4f} - Logged.")
             
             if iteration % 10 == 0:
                 os.makedirs("models", exist_ok=True)
@@ -195,7 +211,7 @@ def self_play_rl_loop():
                         safetensors.torch.save_file(opt_tensors, opt_tmp_path)
                         os.replace(opt_tmp_path, opt_checkpoint_path)
 
-                    print(f"[SYSTEM] Checkpoint (Model & Optimizer) saved atomically: {checkpoint_path}")
+                    print(f"[SYSTEM] GRPO Checkpoint (Model & Optimizer) saved: {checkpoint_path}")
                 else:
                     print("[WARNING] Catastrophic Forgetting Detected. Checkpoint Aborted.")
                 
@@ -218,12 +234,11 @@ def self_play_rl_loop():
 
 def inference_mode(task: str):
     """
-    Executes the fully linked AGI pipeline:
+    Executes the fully linked AGI pipeline with Real-Time Terminal Visualization:
     User -> Tool Assimilation -> Swarm -> Model -> Tools -> Output
     """
-    print("="*60)
-    print("[SYSTEM] Starting Full GenAI Pipeline")
-    print("="*60)
+    from src.visualizer import RealTimeStreamingVisualizer
+    RealTimeStreamingVisualizer.print_section_header("Starting Full AGI Execution Pipeline")
     
     assimilate_tools()
     
@@ -233,7 +248,7 @@ def inference_mode(task: str):
     import ast
     
     print(f"\n[USER] Task: {task}")
-    print("[SYSTEM] Analyzing task to dynamically spawn specialized agents...\n")
+    RealTimeStreamingVisualizer.print_section_header("Dynamically Spawning Specialized Swarm Agents")
     
     role_prompt = f"Analyze the following task and return a Python list of exactly 2 expert roles (strings) best suited to solve it. Output ONLY the list, nothing else.\nTask: {task}"
     try:
@@ -244,11 +259,11 @@ def inference_mode(task: str):
     except Exception:
         roles = ["Logical_Reasoner", "Code_Expert"]
         
-    print(f"[SYSTEM] Dispatching Swarm Agents: {roles}\n")
+    print(f"\n[SYSTEM] Dispatched Swarm Roles: {roles}")
+    RealTimeStreamingVisualizer.print_section_header("Executing Actor-Critic ReAct & Sandbox Trajectory")
     
     results = orchestrate_swarm(task, roles)
-    print("\n" + "="*60)
-    print("[SYSTEM] Final Swarm Evaluation:")
+    RealTimeStreamingVisualizer.print_section_header("Final Swarm Consensus & Execution Evaluation")
     pprint.pprint(results)
 
 if __name__ == "__main__":

@@ -95,9 +95,12 @@ def critic_agent_task(task_description: str, generation_results: dict, return_di
 
 def orchestrate_swarm(task_description: str, roles: list) -> dict:
     """
-    SWARM INTELLIGENCE ORCHESTRATOR (ACTOR-CRITIC)
-    Spawns clones to solve problems, then spawns a Critic to evaluate them.
+    SWARM INTELLIGENCE ORCHESTRATOR (ACTOR-CRITIC + TREE-OF-THOUGHT CONSENSUS)
+    Spawns clones to solve problems, scores trajectories with PRM, and evaluates them with a Critic.
     """
+    from src.prm import StepProcessRewardModel
+    prm = StepProcessRewardModel()
+    
     manager = multiprocessing.Manager()
     return_dict = manager.dict()
     lock = manager.Lock()
@@ -114,10 +117,20 @@ def orchestrate_swarm(task_description: str, roles: list) -> dict:
         
     generation_results = dict(return_dict)
     
+    tot_scores = {}
+    for role, text in generation_results.items():
+        if isinstance(text, str):
+            steps = text.split("\n")
+            scores = prm.score_reasoning_steps(steps)
+            tot_scores[role] = sum(scores) / max(1, len(scores))
+            
+    generation_results["tot_trajectory_scores"] = tot_scores
+    
     critic_job = multiprocessing.Process(target=critic_agent_task, args=(task_description, generation_results, return_dict, lock))
     critic_job.daemon = True
     critic_job.start()
     critic_job.join()
         
     return dict(return_dict)
+
 

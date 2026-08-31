@@ -83,9 +83,9 @@ class AGIInferenceEngine:
             print("[TIP] Run 'python src/tools/weight_porter.py' to download a brain.")
 
     def generate_response(self, prompt: str, max_new_tokens: int = 50) -> str:
-        """
-        Passes the prompt through the Neural Network using KV-Cache.
-        """
+        """Passes prompt through Neural Network with real-time visual streaming."""
+        from src.visualizer import RealTimeStreamingVisualizer
+        
         try:
             tokens = self.enc.encode(prompt, add_special_tokens=True)
         except TypeError:
@@ -116,6 +116,12 @@ class AGIInferenceEngine:
                 
                 idx = torch.cat((idx, idx_next), dim=1)
                 generated_ids.append(idx_next.item())
+                
+                try:
+                    tok_text = self.enc.decode([idx_next.item()])
+                    RealTimeStreamingVisualizer.stream_thought_token(tok_text)
+                except Exception:
+                    pass
                 
                 if hasattr(self.enc, 'eos_token_id') and idx_next.item() == self.enc.eos_token_id:
                     break

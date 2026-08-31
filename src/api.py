@@ -67,6 +67,9 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     generated_text: str
 
+from fastapi.responses import StreamingResponse
+import asyncio
+
 @app.post("/v1/generate", response_model=GenerateResponse)
 def generate_text(request: GenerateRequest):
     if model is None:
@@ -94,4 +97,31 @@ def generate_text(request: GenerateRequest):
         
     full_output = tokenizer.decode(generated_idx)
     return GenerateResponse(generated_text=full_output)
+
+@app.post("/v1/chat/stream")
+async def stream_text(request: GenerateRequest):
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model is not loaded properly.")
+        
+    prompt = f"Instruction: {request.instruction}\nOutput:"
+    context_tokens = tokenizer.encode(prompt, disallowed_special=())
+    context_tensor = torch.tensor([context_tokens], dtype=torch.long, device=device)
+    
+    async def token_generator():
+        with torch.no_grad():
+            generated_idx = model.generate(
+                context_tensor,
+                max_new_tokens=request.max_tokens,
+                temperature=request.temperature,
+                agentic_mode=False
+            )[0].tolist()
+            
+        for token_id in generated_idx[len(context_tokens):]:
+            token_str = tokenizer.decode([token_id])
+            yield f"data: {token_str}\n\n"
+            await asyncio.sleep(0.01)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(token_generator(), media_type="text/event-stream")
+
 
