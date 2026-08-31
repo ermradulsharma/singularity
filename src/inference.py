@@ -21,7 +21,6 @@ class ModelArgs:
     intermediate_size = None
 
     def __init__(self):
-        # Dynamically scale architecture based on downloaded config
         if os.path.exists("models/config.json"):
             try:
                 with open("models/config.json", "r") as f:
@@ -48,7 +47,6 @@ class AGIInferenceEngine:
             self.config.num_experts, self.config.num_experts_per_tok,
             intermediate_size=self.config.intermediate_size
         ).to(self.device)
-        # Attempt to load ported weights from the Neural Weight Porter
         possible_brains = ["models/smollm_agi.safetensors", "models/tinyllama_agi.safetensors", "models/uncensored_agi.safetensors", "models/llama3_agi.safetensors", "models/deepseek_agi.safetensors"]
         weights_loaded = False
         loaded_brain = None
@@ -57,7 +55,6 @@ class AGIInferenceEngine:
             if os.path.exists(brain_path):
                 try:
                     print(f"[SYSTEM] Loading Pre-Trained Brain: {brain_path}...")
-                    # Load on CPU first to prevent VRAM spikes, then the model handles device placement
                     state_dict = safetensors.torch.load_file(brain_path, device="cpu")
                     load_result = self.model.load_state_dict(state_dict, strict=False)
                     print(f"[DEBUG] Missing keys: {len(load_result.missing_keys)}")
@@ -71,7 +68,6 @@ class AGIInferenceEngine:
                 except Exception as e:
                     print(f"[WARNING] Failed to load brain '{brain_path}': {e}")
                     
-        # Load correct tokenizer from LOCAL storage (Offline Mode - Strict Sovereignty)
         import tiktoken
         try:
             from transformers import AutoTokenizer
@@ -104,13 +100,11 @@ class AGIInferenceEngine:
         
         with torch.no_grad():
             for _ in range(max_new_tokens):
-                # Pass only the last token if cache exists
                 input_idx = idx[:, -1:] if past_key_values is not None else idx
                 
                 logits, _, past_key_values = self.model(input_idx, use_cache=True, past_key_values=past_key_values)
                 logits = logits[:, -1, :]
                 
-                # Temperature & Top-K Sampling
                 temperature = 0.7
                 top_k = 50
                 logits = logits / temperature
@@ -123,7 +117,6 @@ class AGIInferenceEngine:
                 idx = torch.cat((idx, idx_next), dim=1)
                 generated_ids.append(idx_next.item())
                 
-                # Basic EOT break
                 if hasattr(self.enc, 'eos_token_id') and idx_next.item() == self.enc.eos_token_id:
                     break
                     
@@ -150,7 +143,6 @@ class AGIInferenceEngine:
         else:
             print(f"[SYSTEM] Note: Adapter '{variant_name}' not found locally. Proceeding with blank initialized adapter.")
 
-# Global singleton to prevent reloading model into GPU multiple times
 _engine = None
 def generate_text(prompt: str, variant: str = None) -> str:
     global _engine
@@ -159,3 +151,4 @@ def generate_text(prompt: str, variant: str = None) -> str:
     if variant:
         _engine.load_variant(variant)
     return _engine.generate_response(prompt)
+

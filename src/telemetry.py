@@ -26,10 +26,9 @@ class CognitiveTelemetry:
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
         except Exception as e:
-            # Fallback if I/O fails
             pass
             
-        # Echo to stdout using sys.stdout.write to bypass built-in print hooks (prevents recursion)
         sys.stdout.write(f"[{level.upper()}] [{module}] {message}\n")
 
 logger = CognitiveTelemetry()
+

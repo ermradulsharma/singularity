@@ -42,7 +42,6 @@ class UniversalDynamicBlock(nn.Module):
         self.is_moe = e > 0
         self.e_t = e_t
         
-        # Dynamic Graph Components
         self.graph = nn.ModuleDict({
             'norm1': nn.LayerNorm(d), 'norm2': nn.LayerNorm(d),
             'attn': nn.ModuleDict({
@@ -76,7 +75,6 @@ class UniversalDynamicBlock(nn.Module):
             k, v = torch.cat([past_kv[0], k], dim=1), torch.cat([past_kv[1], v], dim=1)
         pkv = (k, v) if use_cache else None
         
-        # Dynamic Grouped-Query resolution
         if self.h != self.kv: 
             k, v = [t.repeat_interleave(self.h // self.kv, dim=2) for t in (k, v)]
             
@@ -89,13 +87,10 @@ class UniversalDynamicBlock(nn.Module):
         nx = self.graph['norm2'](x)
         if self.is_moe:
             wt, exp = torch.topk(F.softmax(self.graph['router'](nx), dim=-1), self.e_t, dim=-1)
-            # Mathematical MoE Routing
             moe_out = torch.zeros_like(nx)
             for i in range(self.e_t):
-                # We iteratively accumulate the output of the selected experts
                 expert_idx = exp[:, :, i]
                 expert_w = wt[:, :, i].unsqueeze(-1)
-                # To avoid complex masking in dense loop, we iterate batch/time for absolute precision
                 for b in range(B):
                     for t in range(T):
                         moe_out[b, t] += self.graph['experts'][expert_idx[b, t].item()](nx[b, t]) * expert_w[b, t]
@@ -127,11 +122,9 @@ class GPTLanguageModel(nn.Module):
         
         self.register_buffer("freqs_cis", precompute_freqs_cis(n_embd // n_head, block_size * 4), persistent=False)
         
-        # 🚀 AGI Upgrade: Independent Neural Memory & Sandbox
-        self.long_term_memory = memory.IndependentNeuralMemory(memory_file="data/memory.agi")
+        self.long_term_memory = memory.IndependentNeuralMemory(memory_file="data/memory.safetensors")
         self.sandbox = secure_sandbox.SecureSandbox(use_docker=True)
         
-        # 🧠 AGI Upgrade: Sub-Brain Ensemble (Absorb other models)
         self.sub_brains = nn.ModuleDict()
         self._load_sub_brains(n_embd)
         
@@ -285,3 +278,4 @@ class GPTLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
             
         return idx
+

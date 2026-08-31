@@ -13,15 +13,13 @@ class InstructionDataset(Dataset):
         
         self.enc = tiktoken.get_encoding("gpt2")
         
-        # 🚀 REGISTER NATIVE TOOL-CALLING & AGENTIC TOKENS
-        self.TOOL_CALL = self.enc.n_vocab       # ID: 50257
-        self.TOOL_INPUT = self.enc.n_vocab + 1  # ID: 50258
-        self.TOOL_OUTPUT = self.enc.n_vocab + 2 # ID: 50259
-        self.THOUGHT = self.enc.n_vocab + 3     # 🧠 ID: 50260 (Agentic Inner Monologue Start)
-        self.END_THOUGHT = self.enc.n_vocab + 4 # 🧠 ID: 50261 (Agentic Inner Monologue End)
-        self.END_OF_TEXT = self.enc.n_vocab + 5 # ID: 50262
+        self.TOOL_CALL = self.enc.n_vocab
+        self.TOOL_INPUT = self.enc.n_vocab + 1
+        self.TOOL_OUTPUT = self.enc.n_vocab + 2
+        self.THOUGHT = self.enc.n_vocab + 3
+        self.END_THOUGHT = self.enc.n_vocab + 4
+        self.END_OF_TEXT = self.enc.n_vocab + 5
         
-        # The model's embedding matrix will automatically resize to fit these!
         self.vocab_size = self.enc.n_vocab + 6
         
         self.special_tokens_map = {
@@ -41,7 +39,6 @@ class InstructionDataset(Dataset):
             with open(hf_dataset_name, "r", encoding="utf-8") as f:
                 for line in f:
                     dataset.append(json.loads(line))
-            # Simple split logic
             if split == "train":
                 dataset = dataset[:2500]
             else:
@@ -56,7 +53,6 @@ class InstructionDataset(Dataset):
                 prompt += f"Input: {row['input']}\n"
             prompt += f"Output: {row['output']}\n"
             
-            # Encode base text
             tokens = self.enc.encode(prompt, allowed_special="all")
             tokens.append(self.END_OF_TEXT)
             self.data.extend(tokens)
@@ -107,3 +103,4 @@ class InstructionDataset(Dataset):
         x = chunk[:-1] 
         y = chunk[1:]  
         return x, y
+

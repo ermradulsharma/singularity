@@ -2,7 +2,8 @@ from src.telemetry import logger
 import os
 import sys
 
-def check_dependencies():
+def _check_dependencies():
+    """Internal helper to ensure huggingface_hub is available."""
     try:
         import huggingface_hub
     except ImportError:
@@ -10,10 +11,9 @@ def check_dependencies():
         sys.exit(1)
 
 def extract_raw_weights(model_id: str):
-    """Autonomously downloads the RAW weights, configs, and datasets for a given HuggingFace model. NO architecture translation is performed. The AGI will absorb this data internally later."""
+    """Autonomously downloads raw weights, configs, and datasets from HuggingFace without architecture translation."""
     from huggingface_hub import snapshot_download
     
-    # Safe directory name based on model_id
     model_dir_name = model_id.replace("/", "_")
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     save_path = os.path.join(base_dir, "data", "raw_weights", model_dir_name)
@@ -23,7 +23,6 @@ def extract_raw_weights(model_id: str):
     print("[*] Note: This may take a long time depending on the model size (e.g. 15GB+).")
     
     try:
-        # Download all safetensors, bin, json, and tokenizer files
         snapshot_download(
             repo_id=model_id,
             local_dir=save_path,
@@ -38,7 +37,7 @@ def extract_raw_weights(model_id: str):
         print(f"\n[ERROR] Failed to extract data: {e}")
 
 if __name__ == "__main__":
-    check_dependencies()
+    _check_dependencies()
     print("============================================================")
     print("[*] AGI AUTONOMOUS KNOWLEDGE EXTRACTOR (Raw Tensors & Data) [*]")
     print("============================================================")
@@ -52,3 +51,4 @@ if __name__ == "__main__":
         extract_raw_weights(custom_id.strip())
     else:
         print("[ERROR] No Model ID provided. Exiting.")
+

@@ -22,7 +22,6 @@ class AsyncDynamicToolRouter:
             if not tool_name:
                 return "[ERROR] Missing 'tool' in tool call."
                 
-            # --- LEGACY SUPPORT FOR COMPLEX OOP ENGINES ---
             if tool_name in ["recon_engine", "stock_analysis", "code_interpreter"]:
                 if tool_name == "recon_engine":
                     from src.tools.recon_engine import UnrestrictedAgentReconEngine
@@ -42,7 +41,6 @@ class AsyncDynamicToolRouter:
                     obs = await asyncio.to_thread(run_python_code, code)
                     return f"[{tool_name} Result]: {obs}"
                     
-            # --- UNIVERSAL DYNAMIC EXECUTION FOR 28+ FLAT TOOLS ---
             if not function_name:
                 return f"[ERROR] Missing 'function' name for universal tool {tool_name}."
                 
@@ -54,7 +52,6 @@ class AsyncDynamicToolRouter:
             except AttributeError:
                 return f"[ERROR] Function '{function_name}' not found in tool '{tool_name}'"
                 
-            # Execute the function asynchronously in a background thread
             observation = await asyncio.to_thread(func, **kwargs)
             return f"[{tool_name}.{function_name} Result]: {observation}"
             
@@ -74,13 +71,11 @@ class AsyncDynamicToolRouter:
         if not matches:
             return {"tool_called": False, "observation": None}
             
-        # Create asynchronous tasks for all found tool calls
         tasks = [self._execute_single_tool(m) for m in matches]
         
-        # Run all tasks concurrently and gather results
         results = await asyncio.gather(*tasks)
         
-        # Combine all observations into a single string for the agent's memory
         combined_observation = "\n\n".join(results)
         
         return {"tool_called": True, "observation": combined_observation}
+

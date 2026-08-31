@@ -1,7 +1,6 @@
 import os
 import sys
 
-# Attempt to import the sandbox
 try:
     from src.sandbox import SecureSandbox
 except ImportError:
@@ -14,9 +13,9 @@ def run_python_code(code_str: str, use_docker: bool = True) -> str:
         
     try:
         sandbox = SecureSandbox(use_docker=use_docker)
-        # Execute the untrusted code
         result = sandbox.execute(code_str=code_str, timeout=10)
         return result
     except Exception as e:
         return f"[TOOL ERROR] Code Interpreter failed: {str(e)}"
+
 

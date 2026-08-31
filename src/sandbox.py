@@ -24,7 +24,6 @@ class SafeASTVisitor(ast.NodeVisitor):
         if node_type not in self.ALLOWED_NODES:
             raise SecurityException(f"Forbidden Code Structure Detected: {node_type}")
         
-        # Block Dunder Attribute Access (__class__, __subclasses__, etc.)
         if isinstance(node, ast.Attribute) and node.attr.startswith('__'):
             raise SecurityException(f"Dunder Attribute Access Blocked: {node.attr}")
             
@@ -38,7 +37,7 @@ class SecureSandbox:
 
     def execute(self, code_str: str, env_dict: dict = None, timeout=5, max_memory_mb=128) -> str:
         """Validate and execute untrusted code with OS-level isolation."""
-        del env_dict  # Host objects must never cross the isolation boundary.
+        del env_dict
         try:
             if not isinstance(code_str, str) or not code_str.strip():
                 raise SecurityException("Code must be a non-empty string.")
@@ -105,4 +104,5 @@ class SecureSandbox:
         finally:
             if os.path.exists(temp_script_path):
                 os.remove(temp_script_path)
+
 

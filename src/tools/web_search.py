@@ -19,7 +19,6 @@ def search_wikipedia(query: str, limit: int = 2) -> str:
         snippets = []
         for i, res in enumerate(results[:limit]):
             title = res.get('title', '')
-            # Strip basic HTML tags from snippet
             snippet = res.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '')
             snippets.append(f"[{title}]: {snippet}")
             
@@ -29,5 +28,5 @@ def search_wikipedia(query: str, limit: int = 2) -> str:
 
 def search_web(query: str) -> str:
     """Main search entrypoint for Swarm Agents"""
-    # For now, routes to Wikipedia as a reliable source of facts.
     return search_wikipedia(query)
+

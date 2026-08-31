@@ -9,16 +9,11 @@ from inference import ModelArgs, AGIInferenceEngine
 from model import GPTLanguageModel
 from src.telemetry import logger
 
-# 🚨 STRICT COMPLIANCE OVERRIDE
 def _telemetry_print(*args, **kwargs):
     message = " ".join(map(str, args)).replace('=', '').strip()
     if message:
         logger.log("INFO", "TRAIN", message)
 builtins.print = _telemetry_print
-
-# ---------------------------------------------------------
-# AGI EVOLUTION ENGINE (Self-Training Loop)
-# ---------------------------------------------------------
 
 class AGIDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
@@ -32,7 +27,7 @@ class AGIDataset(Dataset):
         if isinstance(data, dict) and "data" in data:
             data = data["data"]
             
-        for item in data[:5000]: # Limit for demonstration speed
+        for item in data[:5000]:
             instruction = item.get("instruction", "")
             input_text = item.get("input", "")
             output = item.get("output", "")
@@ -82,7 +77,6 @@ def train_agi():
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
     
-    # Advanced: Automatic Mixed Precision & Gradient Accumulation
     scaler = torch.amp.GradScaler('cuda', enabled=('cuda' in str(device)))
     accumulation_steps = 4
     
@@ -95,15 +89,12 @@ def train_agi():
         for step, (x, y) in enumerate(dataloader):
             x, y = x.to(device), y.to(device)
             
-            # Autocast for Mixed Precision
             with torch.amp.autocast(device_type='cuda' if 'cuda' in str(device) else 'cpu'):
                 logits, loss, _ = model(x, targets=y)
                 loss = loss / accumulation_steps
             
-            # Backward pass using Scaler
             scaler.scale(loss).backward()
             
-            # Optimization Step (Only update weights every 'accumulation_steps')
             if (step + 1) % accumulation_steps == 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -114,7 +105,7 @@ def train_agi():
             if step % 10 == 0:
                 print(f"[Epoch {epoch+1}/{epochs}] [Step {step}/{len(dataloader)}] Loss: {loss.item() * accumulation_steps:.4f}")
                 
-            if step >= 100: # Break early for demo
+            if step >= 100:
                 break
                 
     save_path = "models/smollm_agi_evolved.safetensors"
@@ -128,3 +119,4 @@ def train_agi():
 
 if __name__ == "__main__":
     train_agi()
+

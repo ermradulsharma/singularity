@@ -13,15 +13,12 @@ def _text_to_tensor(text: str, dim: int = 128) -> torch.Tensor:
     tensor_data = [0.0] * dim
     
     for word, count in word_counts.items():
-        # Deterministic index hashing
         h_hex = hashlib.md5(word.encode()).hexdigest()
         idx = int(h_hex, 16) % dim
         
-        # Log-normalized Term Frequency
         tf = 1 + math.log(count)
         tensor_data[idx] += tf
         
-    # L2 Normalization
     tensor_vec = torch.tensor(tensor_data, dtype=torch.float32)
     norm = torch.norm(tensor_vec, p=2)
     if norm > 0:
@@ -50,3 +47,4 @@ def search_memory(query_text: str, top_k: int = 3) -> str:
         return "No relevant memories found."
         
     return f"Retrieved {retrieved.shape[1]} memory tensors successfully."
+
