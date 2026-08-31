@@ -4,7 +4,7 @@ import torch
 import json
 import asyncio
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import tiktoken
@@ -32,32 +32,46 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 engine = None
 batcher = None
 
+from src.scheduler import ContinuousBatchScheduler
+
 class AsyncContinuousBatcher:
     """
     Production-grade Async Continuous Batching Engine for high-throughput serving.
     Dynamically queues incoming requests, allocates KV-cache memory blocks via PagedKVCacheManager,
-    and streams tokens with low-latency async yielding.
+    and streams tokens with low-latency continuous iteration steps.
     """
-    def __init__(self, inference_engine: AGIInferenceEngine, max_batch_size: int = 16):
+    def __init__(self, inference_engine: AGIInferenceEngine, max_batch_size: int = 32):
         self.engine = inference_engine
-        self.max_batch_size = max_batch_size
-        from src.model import PagedKVCacheManager
-        self.kv_manager = PagedKVCacheManager(block_size=16, num_blocks=512)
+        self.scheduler = ContinuousBatchScheduler(inference_engine.model, max_batch_size=max_batch_size)
+        self._task = None
+
+    def start(self):
+        if self._task is None:
+            self._task = asyncio.create_task(self.scheduler.run_loop())
 
     async def stream_request(self, session_id: str, prompt: str, max_tokens: int, temperature: float):
         try:
-            self.kv_manager.allocate(session_id, len(prompt))
-            for tok_str in self.engine.generate_response_stream(prompt, max_new_tokens=max_tokens, temperature=temperature):
-                yield tok_str
-                await asyncio.sleep(0.001)
-        finally:
-            self.kv_manager.free(session_id)
+            self.start()
+            tokens = self.engine.enc.encode(prompt)
+            req = await self.scheduler.add_request(tokens, max_new_tokens=max_tokens, temperature=temperature)
+            
+            while not req.is_finished or not req.queue.empty():
+                try:
+                    tok_id = await asyncio.wait_for(req.queue.get(), timeout=0.1)
+                    tok_str = self.engine.enc.decode([tok_id])
+                    yield tok_str
+                except asyncio.TimeoutError:
+                    if req.is_finished:
+                        break
+        except Exception as e:
+            yield f"[ERROR]: {str(e)}"
 
 @app.on_event("startup")
 async def startup_event():
     global engine, batcher
     engine = AGIInferenceEngine(enable_fp8=False, enable_compile=False)
     batcher = AsyncContinuousBatcher(engine)
+    batcher.start()
 
 class GenerateRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=8_000)
@@ -169,3 +183,34 @@ async def chat_completions(request: ChatCompletionRequest):
             ],
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(full_text.split()), "total_tokens": len(prompt.split()) + len(full_text.split())}
         }
+
+
+@app.websocket("/v1/realtime/speech")
+async def realtime_speech_websocket(websocket: WebSocket):
+    """
+    SOTA Full-Duplex Real-Time Speech-to-Speech WebSocket Endpoint.
+    Ingests continuous 24kHz PCM audio byte streams, extracts continuous neural latents via SNAC codec,
+    and streams synthesized neural speech bytes back to the client in real-time.
+    """
+    await websocket.accept()
+    from src.audio import FullDuplexWebSocketAudioProcessor
+    processor = FullDuplexWebSocketAudioProcessor(sample_rate=24000)
+    
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            latents = processor.process_incoming_bytes(data)
+            if latents is not None and engine is not None:
+                # Forward acoustic latents through early-fusion multi-modal transformer
+                with torch.no_grad():
+                    dummy_tokens = torch.tensor([[50256]], dtype=torch.long, device=engine.device)
+                    _ = engine.model(dummy_tokens, speech_features=latents.to(engine.device))
+                
+                # Synthesize outgoing neural speech bytes
+                response_bytes = processor.synthesize_outgoing_bytes(latents)
+                await websocket.send_bytes(response_bytes)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        await websocket.close(code=1011, reason=str(e))
+

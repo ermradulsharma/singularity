@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import copy
 from typing import List, Dict, Any, Tuple
 from src.model import GPTLanguageModel
-from src.prm import StepProcessRewardModel
+from src.prm import StepProcessRewardModel, DynamicExecutionVerifier
 from src.tokenizer import get_unified_tokenizer
 
 class GRPOTrainer:
@@ -36,22 +36,23 @@ class GRPOTrainer:
                 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
         self.prm = StepProcessRewardModel(vocab_size=model.vocab_size, d_model=model.graph['tok_emb'].weight.size(1)).to(self.device)
+        self.verifier = DynamicExecutionVerifier()
         self.tokenizer = get_unified_tokenizer()
 
     def _compute_rewards(self, prompts: List[str], completions: List[str]) -> torch.Tensor:
-        """Computes step-level PRM, math correctness, and format compliance rewards for generated trajectories."""
+        """Computes step-level PRM, math correctness, format compliance, and dynamic code/Lean4 execution rewards."""
         rewards = []
         for prompt, comp in zip(prompts, completions):
             full_text = prompt + comp
             prm_score = self.prm.score_trajectory(full_text)
             
+            # Dynamic AST / Docker Code Execution & Lean4 Proof Verification Reward
+            dyn_verif_score = self.verifier.evaluate_trajectory_verification(comp)
+            
             # Format compliance reward (DeepSeek-R1 style <think>...</think> structure)
             format_reward = 1.0 if ("<think>" in comp and "</think>" in comp) else 0.0
             
-            # Code/Math syntax check bonus
-            syntax_bonus = 0.5 if ("```python" in comp and "```" in comp) else 0.0
-            
-            total_reward = 0.6 * prm_score + 0.3 * format_reward + 0.1 * syntax_bonus
+            total_reward = 0.4 * prm_score + 0.4 * dyn_verif_score + 0.2 * format_reward
             rewards.append(total_reward)
             
         return torch.tensor(rewards, dtype=torch.float32, device=self.device)
@@ -142,3 +143,27 @@ class GRPOTrainer:
             "std_reward": std_r.mean().item(),
             "kl_divergence": kl_div.mean().item()
         }
+
+    def continuous_self_play_loop(self, num_iterations: int = 10, max_gen_tokens: int = 64) -> List[Dict[str, float]]:
+        """
+        DeepSeek-R1 / OpenAI o1 Style Continuous Self-Play RL Evolution Loop.
+        Iteratively generates self-play reasoning rollout groups G, scores them via compiler execution & Lean4 verifiers,
+        and updates policy model weights.
+        """
+        history_stats = []
+        sample_prompts = [
+            "Calculate the integral of x^2 from 0 to 3.\n<think>",
+            "Write python code to compute Fibonacci numbers efficiently.\n<think>",
+            "Prove that prime numbers are infinite using Lean4.\n<think>",
+            "Solve the system of equations 2x + y = 10 and x - y = 2.\n<think>"
+        ]
+        
+        for iteration in range(num_iterations):
+            p_text = sample_prompts[iteration % len(sample_prompts)]
+            p_tokens = torch.tensor([self.tokenizer.encode(p_text)], dtype=torch.long, device=self.device)
+            stats = self.train_step(p_tokens, max_gen_tokens=max_gen_tokens)
+            stats["iteration"] = iteration + 1
+            history_stats.append(stats)
+            
+        return history_stats
+

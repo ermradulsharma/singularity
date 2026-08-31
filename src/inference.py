@@ -395,8 +395,50 @@ class HuggingFaceWeightPorter:
         fallback_path = os.path.join(output_dir, "smollm_agi.safetensors")
         return HuggingFaceWeightPorter.synthesize_initial_pretrained_weights(fallback_path)
 
+class CUDAGraphDecodeRunner:
+    """Zero-Overhead CUDA Graph Capturer & Replayer for Single-Token Decoding Steps."""
+    def __init__(self, model: torch.nn.Module, max_batch_size: int = 8):
+        self.model = model
+        self.max_batch_size = max_batch_size
+        self.device = next(model.parameters()).device
+        self.graph = None
+        self.static_input = None
+        self.static_logits = None
+
+    def capture(self, sample_input: torch.Tensor):
+        """Captures CUDA Execution Graph for fixed shape single-token decode pass."""
+        if not torch.cuda.is_available() or self.device.type != "cuda":
+            return
+        try:
+            self.static_input = torch.zeros_like(sample_input, device=self.device)
+            s = torch.cuda.Stream()
+            s.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s):
+                for _ in range(3):
+                    self.model(self.static_input, use_cache=True)
+            torch.cuda.current_stream().wait_stream(s)
+
+            self.graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self.graph):
+                self.static_logits, _ = self.model(self.static_input, use_cache=True)
+        except Exception:
+            self.graph = None
+
+    def replay(self, input_tensor: torch.Tensor) -> Optional[torch.Tensor]:
+        """Replays recorded CUDA Graph with zero CPU dispatch overhead."""
+        if self.graph is None or self.static_input is None:
+            return None
+        try:
+            self.static_input.copy_(input_tensor)
+            self.graph.replay()
+            return self.static_logits
+        except Exception:
+            return None
+
+
 class vLLMInferenceEngine:
     """Production vLLM / SGLang High-Throughput C++ CUDA Acceleration Backend Engine."""
+
 
     def __init__(self, model_path: str = "models", scale: str = "micro"):
         self.is_vllm_available = False
