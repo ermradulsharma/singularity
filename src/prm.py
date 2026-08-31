@@ -6,7 +6,7 @@ import ast
 
 class NeuralStepEncoder(nn.Module):
     """Deep Transformer sequence encoder for token-level Process Reward Model scoring."""
-    def __init__(self, vocab_size: int = 128256, d_model: int = 128, n_head: int = 4):
+    def __init__(self, vocab_size: int = 200019, d_model: int = 128, n_head: int = 4):
         super().__init__()
         self.tok_emb = nn.Embedding(vocab_size, d_model)
         self.pos_emb = nn.Parameter(torch.randn(1, 256, d_model))
@@ -32,7 +32,7 @@ class StepProcessRewardModel(nn.Module):
     Process Reward Model (PRM) for step-by-step intermediate Chain-of-Thought (CoT) reasoning verification.
     Inspired by DeepSeek-R1 Process-Reward Guided Reinforcement Learning & Math PRMs.
     """
-    def __init__(self, vocab_size: int = 128256, d_model: int = 128):
+    def __init__(self, vocab_size: int = 200019, d_model: int = 128):
         super().__init__()
         self.d_model = d_model
         self.neural_encoder = NeuralStepEncoder(vocab_size=vocab_size, d_model=d_model)
@@ -89,9 +89,9 @@ class StepProcessRewardModel(nn.Module):
         """Evaluates a trajectory of reasoning steps and returns scalar quality scores between 0.0 and 1.0."""
         scores = []
         device = next(self.parameters()).device
-        import tiktoken
+        from src.tokenizer import get_unified_tokenizer
         try:
-            enc = tiktoken.get_encoding("gpt2")
+            enc = get_unified_tokenizer()
         except Exception:
             enc = None
 
@@ -120,6 +120,8 @@ class StepProcessRewardModel(nn.Module):
                     t_ids = [ord(c) % 50257 for c in step_clean[:256]]
                 if not t_ids:
                     t_ids = [0]
+                max_v = self.neural_encoder.tok_emb.weight.size(0)
+                t_ids = [int(t) % max_v for t in t_ids]
                 t_tensor = torch.tensor([t_ids[:256]], dtype=torch.long, device=device)
                 neural_score = float(self.neural_encoder(t_tensor).item())
                 

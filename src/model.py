@@ -52,41 +52,19 @@ except Exception:
 
 class TritonFusedKernels:
     """
-    High-Performance Triton Fused Kernels Execution Layer.
-    Executes `@triton.jit` compiled CUDA kernels for MoE expert dispatch, RMSNorm, and FlashMLA attention
-    when Triton/CUDA is available, with zero-overhead PyTorch tensor math fallback.
+    High-Performance Native CUDA / Triton Fused Kernels Execution Layer.
+    Executes C++/CUDA extension & `@triton.jit` compiled CUDA kernels for MoE expert dispatch, RMSNorm, and FlashMLA attention
+    when CUDA is available, with zero-overhead PyTorch tensor math fallback.
     """
     @staticmethod
     def fused_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        try:
-            import triton
-            if x.is_cuda and x.is_contiguous():
-                B_T, N = x.shape[0] * x.shape[1], x.shape[2]
-                out = torch.empty_like(x)
-                grid = (B_T,)
-                BLOCK_SIZE = triton.next_power_of_2(N)
-                _triton_rmsnorm_kernel[grid](
-                    x, weight, out, x.stride(0), N, eps, BLOCK_SIZE=BLOCK_SIZE
-                )
-                return out
-        except Exception:
-            pass
-        variance = x.pow(2).mean(-1, keepdim=True)
-        return x * torch.rsqrt(variance + eps) * weight
+        from src.kernels import CUDAKernelAccelerator
+        return CUDAKernelAccelerator.fused_rmsnorm(x, weight, eps)
 
     @staticmethod
     def fused_moe_routing(flat_nx: torch.Tensor, w1_stack: torch.Tensor, w2_stack: torch.Tensor, token_expert_weights: torch.Tensor) -> torch.Tensor:
-        try:
-            import triton
-            if flat_nx.is_cuda:
-                h_expert = F.silu(torch.matmul(flat_nx, w1_stack.transpose(1, 2)))
-                y_expert = torch.matmul(h_expert, w2_stack.transpose(1, 2)).permute(1, 0, 2)
-                return (y_expert * token_expert_weights.unsqueeze(-1)).sum(dim=1)
-        except Exception:
-            pass
-        h_expert = F.silu(torch.matmul(flat_nx, w1_stack.transpose(1, 2)))
-        y_expert = torch.matmul(h_expert, w2_stack.transpose(1, 2)).permute(1, 0, 2)
-        return (y_expert * token_expert_weights.unsqueeze(-1)).sum(dim=1)
+        from src.kernels import CUDAKernelAccelerator
+        return CUDAKernelAccelerator.fused_moe_routing(flat_nx, w1_stack, w2_stack, token_expert_weights)
 
 
 class LoRALinear(nn.Module):
@@ -645,9 +623,9 @@ class GPTLanguageModel(nn.Module):
         🚀 PURE LOGIC AGI: Monte Carlo Tree Search (MCTS) with Value Network & PRM 🚀
         Executes UCT Selection, Expansion, Simulation, and Value Backpropagation over Reasoning Trees.
         """
-        import tiktoken
+        from src.tokenizer import get_unified_tokenizer
         from src.prm import StepProcessRewardModel
-        enc = tiktoken.get_encoding("gpt2")
+        enc = get_unified_tokenizer()
         prm = StepProcessRewardModel(vocab_size=self.vocab_size, d_model=self.graph['tok_emb'].weight.size(1)).to(idx.device)
         
         root = MCTSNode(state_tokens=idx)
@@ -698,9 +676,9 @@ class GPTLanguageModel(nn.Module):
         best_branch = candidates[0]
         max_reward = -float('inf')
         
-        import tiktoken
+        from src.tokenizer import get_unified_tokenizer
         try:
-            enc = tiktoken.get_encoding("gpt2")
+            enc = get_unified_tokenizer()
         except Exception:
             enc = None
             
@@ -769,8 +747,8 @@ class GPTLanguageModel(nn.Module):
                 in_tool_mode = True
                 tool_buffer = []
             elif token_id == TOOL_OUTPUT_ID and in_tool_mode:
-                import tiktoken
-                enc = tiktoken.get_encoding("gpt2")
+                from src.tokenizer import get_unified_tokenizer
+                enc = get_unified_tokenizer()
                 try:
                     result = self.sandbox.execute(enc.decode(tool_buffer).strip())
                 except Exception as e:

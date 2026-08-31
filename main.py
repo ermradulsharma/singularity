@@ -132,8 +132,8 @@ def self_play_rl_loop():
     for param in ref_model.parameters():
         param.requires_grad = False
         
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    enc = tiktoken.get_encoding("gpt2")
+    from src.tokenizer import get_unified_tokenizer
+    enc = get_unified_tokenizer()
     
     from src.prm import StepProcessRewardModel
     prm = StepProcessRewardModel(vocab_size=config.vocab_size, d_model=config.n_embd).to(device)

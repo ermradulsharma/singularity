@@ -11,7 +11,8 @@ class InstructionDataset(Dataset):
     def __init__(self, hf_dataset_name, block_size, split="train"):
         self.block_size = block_size
         
-        self.enc = tiktoken.get_encoding("gpt2")
+        from src.tokenizer import get_unified_tokenizer
+        self.enc = get_unified_tokenizer()
         
         self.TOOL_CALL = self.enc.n_vocab
         self.TOOL_INPUT = self.enc.n_vocab + 1
@@ -116,7 +117,8 @@ class StreamingTerabyteDataset(torch.utils.data.IterableDataset):
         self.data_sources = data_sources
         self.block_size = block_size
         self.buffer_size = buffer_size
-        self.enc = tiktoken.get_encoding("gpt2")
+        from src.tokenizer import get_unified_tokenizer
+        self.enc = get_unified_tokenizer()
         self.seen_hashes = set()
 
     def _is_duplicate(self, text: str) -> bool:

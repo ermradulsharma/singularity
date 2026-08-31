@@ -171,9 +171,9 @@ class DistributedRolloutWorkerPool:
         """Generates G group trajectory samples across workers, evaluates PRM+Z3 rewards, and calculates GRPO advantages."""
         rollouts = []
         scores = []
-        import tiktoken
+        from src.tokenizer import get_unified_tokenizer
         try:
-            enc = tiktoken.get_encoding("gpt2")
+            enc = get_unified_tokenizer()
         except Exception:
             enc = None
 
