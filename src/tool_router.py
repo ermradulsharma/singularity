@@ -148,6 +148,21 @@ class ConstrainedStructuredToolRouter:
             })
         return parsed_results
 
+    def convert_mcp_to_openai_schema(self, mcp_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Converts Anthropic MCP tool schemas to standard OpenAI function declaration schemas."""
+        openai_tools = []
+        for tool in mcp_tools:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", ""),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema", {"type": "object", "properties": {}})
+                }
+            })
+        return openai_tools
+
+
 class GrammarConstrainedLogitProcessor:
     """
     Constrained Token Logit Mask Processor for 100% Guaranteed JSON Schema Compliance.

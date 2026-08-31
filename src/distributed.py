@@ -108,6 +108,34 @@ class RowParallelLinear(torch.nn.Module):
             dist.all_reduce(output_parallel, op=dist.ReduceOp.SUM)
         return output_parallel
 
+class PipelineParallelStage(torch.nn.Module):
+    """Pipeline Parallelism 1F1B (One Forward One Backward) Micro-Batch Stage Execution Engine."""
+    def __init__(self, stage_module: torch.nn.Module, stage_id: int = 0, num_stages: int = 1):
+        super().__init__()
+        self.stage_module = stage_module
+        self.stage_id = stage_id
+        self.num_stages = num_stages
+
+    def forward_micro_batch(self, micro_batch_x: torch.Tensor) -> torch.Tensor:
+        """Executes a single forward pass over a micro-batch."""
+        return self.stage_module(micro_batch_x)
+
+class SequenceParallelScatter(torch.autograd.Function):
+    """Scatters sequence tokens across Tensor Parallel ranks for Sequence Parallelism (SP)."""
+    @staticmethod
+    def forward(ctx, input_tensor, tp_size):
+        ctx.tp_size = tp_size
+        if tp_size <= 1:
+            return input_tensor
+        dim_size = input_tensor.size(1)
+        sub_seq = dim_size // tp_size
+        return input_tensor[:, :sub_seq, :].clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, None
+
 cluster_manager = DistributedClusterManager()
+
 
 

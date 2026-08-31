@@ -337,12 +337,16 @@ class VisionEncoder(nn.Module):
 class MultiModalCrossAttentionConnector(nn.Module):
     """
     Perceiver Resampler-style Cross-Attention Adapter Connector for multi-modal alignment.
-    Replaces naive token concatenation by cross-attending model sequence queries over multi-modal key/values.
+    Replaces naive token concatenation by cross-attending model sequence queries over multi-modal key/values
+    via a fixed-size Latent Query Array (N_latents = 64).
     """
-    def __init__(self, d_model: int, num_heads: int = 4):
+    def __init__(self, d_model: int, num_heads: int = 4, num_latents: int = 64):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
+        self.num_latents = num_latents
+        self.latents = nn.Parameter(torch.randn(1, num_latents, d_model) * 0.02)
+        self.norm_latents = nn.LayerNorm(d_model)
         self.norm_context = nn.LayerNorm(d_model)
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
@@ -359,13 +363,54 @@ class MultiModalCrossAttentionConnector(nn.Module):
         if B_m != B:
             modal_features = modal_features.expand(B, -1, -1)
             
-        q = self.q_proj(x).view(B, T, self.num_heads, D // self.num_heads).transpose(1, 2)
+        latents_exp = self.latents.expand(B, -1, -1)
+        q = self.q_proj(self.norm_latents(latents_exp)).view(B, self.num_latents, self.num_heads, D // self.num_heads).transpose(1, 2)
         k = self.k_proj(self.norm_context(modal_features)).view(B, N, self.num_heads, D // self.num_heads).transpose(1, 2)
         v = self.v_proj(self.norm_context(modal_features)).view(B, N, self.num_heads, D // self.num_heads).transpose(1, 2)
         
         attn_out = F.scaled_dot_product_attention(q, k, v)
-        attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, D)
-        return x + self.out_proj(attn_out)
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, self.num_latents, D)
+        modal_latents = self.out_proj(attn_out)
+        
+        # Second-stage cross-attention between sequence query x and compressed modal_latents
+        q_x = self.q_proj(x).view(B, T, self.num_heads, D // self.num_heads).transpose(1, 2)
+        k_m = self.k_proj(modal_latents).view(B, self.num_latents, self.num_heads, D // self.num_heads).transpose(1, 2)
+        v_m = self.v_proj(modal_latents).view(B, self.num_latents, self.num_heads, D // self.num_heads).transpose(1, 2)
+        
+        x_out = F.scaled_dot_product_attention(q_x, k_m, v_m)
+        x_out = x_out.transpose(1, 2).contiguous().view(B, T, D)
+        return x + self.out_proj(x_out)
+
+
+class MultiTokenPredictionHead(nn.Module):
+    """
+    DeepSeek-V3 Multi-Token Prediction (MTP) Loss Module.
+    Predicts D future tokens in parallel during training for enhanced representation learning.
+    """
+    def __init__(self, d_model: int, vocab_size: int, depth: int = 1):
+        super().__init__()
+        self.depth = depth
+        self.proj = nn.ModuleList([
+            nn.Sequential(nn.Linear(2 * d_model, d_model), nn.SiLU(), nn.Linear(d_model, vocab_size, bias=False))
+            for _ in range(depth)
+        ])
+
+    def forward(self, hidden_states: torch.Tensor, targets: torch.Tensor = None) -> torch.Tensor:
+        """Computes MTP auxiliary cross-entropy loss over future sequence positions."""
+        if targets is None:
+            return torch.tensor(0.0, device=hidden_states.device)
+        
+        loss = torch.tensor(0.0, device=hidden_states.device)
+        B, T, D = hidden_states.size()
+        for d, head in enumerate(self.proj):
+            if T > d + 1:
+                h_curr = hidden_states[:, :-(d+1), :]
+                h_next = hidden_states[:, d+1:, :]
+                mtp_in = torch.cat([h_curr, h_next], dim=-1)
+                logits = head(mtp_in)
+                t_target = targets[:, d+1:]
+                loss = loss + F.cross_entropy(logits.reshape(-1, logits.size(-1)), t_target.reshape(-1), ignore_index=-100)
+        return loss / max(1, self.depth)
 
 
 class GPTLanguageModel(nn.Module):
@@ -380,6 +425,7 @@ class GPTLanguageModel(nn.Module):
             'vision': VisionEncoder(dim=n_embd),
             'speech_proj': InterleavedSpeechProjector(d_model=n_embd, audio_dim=64),
             'multimodal_connector': MultiModalCrossAttentionConnector(d_model=n_embd, num_heads=n_head),
+            'mtp_head': MultiTokenPredictionHead(d_model=n_embd, vocab_size=vocab_size),
             'audio_head': DiscreteAudioHead(d_model=n_embd, num_audio_tokens=1024),
             'blocks': nn.ModuleList([UniversalDynamicBlock(n_embd, n_head, n_kv_head, num_experts, num_experts_per_tok) for _ in range(n_layer)]),
             'ln_f': nn.LayerNorm(n_embd),
