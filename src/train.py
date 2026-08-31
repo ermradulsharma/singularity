@@ -5,8 +5,8 @@ import safetensors.torch
 import time
 import builtins
 from torch.utils.data import Dataset, DataLoader
-from inference import ModelArgs, AGIInferenceEngine
-from model import GPTLanguageModel
+from src.inference import ModelArgs, AGIInferenceEngine
+from src.model import GPTLanguageModel
 from src.telemetry import logger
 
 def _telemetry_print(*args, **kwargs):

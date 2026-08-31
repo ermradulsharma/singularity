@@ -75,8 +75,11 @@ class AGIInferenceEngine:
                 self.enc = AutoTokenizer.from_pretrained("models/", local_files_only=True)
             else:
                 raise ValueError("No local tokenizer found. Enforcing offline sovereignty.")
-        except Exception as e:
-            self.enc = tiktoken.get_encoding("gpt2")
+        except Exception:
+            try:
+                self.enc = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                self.enc = tiktoken.get_encoding("gpt2")
                     
         if not weights_loaded:
             print("[WARNING] No Pre-Trained Weights found. Running in Untrained/Mock Hybrid Mode.")
@@ -131,6 +134,46 @@ class AGIInferenceEngine:
             except TypeError:
                 generated_text = self.enc.decode(generated_ids)
             return generated_text
+
+    def generate_response_stream(self, prompt: str, max_new_tokens: int = 50, temperature: float = 0.7):
+        """High-Throughput Generator yielding streamed tokens real-time using KV-Cache block reuse."""
+        try:
+            tokens = self.enc.encode(prompt, add_special_tokens=True)
+        except TypeError:
+            tokens = self.enc.encode(prompt)
+            
+        if len(tokens) > self.config.block_size - max_new_tokens:
+            tokens = tokens[-(self.config.block_size - max_new_tokens):]
+            
+        idx = torch.tensor([tokens], dtype=torch.long).to(self.device)
+        self.model.eval()
+        
+        past_key_values = None
+        
+        with torch.no_grad():
+            for _ in range(max_new_tokens):
+                input_idx = idx[:, -1:] if past_key_values is not None else idx
+                logits, _, past_key_values = self.model(input_idx, use_cache=True, past_key_values=past_key_values)
+                logits = logits[:, -1, :] / max(temperature, 1e-5)
+                
+                v, _ = torch.topk(logits, min(50, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+                
+                probs = torch.nn.functional.softmax(logits, dim=-1)
+                idx_next = torch.multinomial(probs, num_samples=1)
+                
+                idx = torch.cat((idx, idx_next), dim=1)
+                token_id = idx_next.item()
+                
+                try:
+                    tok_text = self.enc.decode([token_id])
+                except Exception:
+                    tok_text = ""
+                    
+                yield tok_text
+                
+                if hasattr(self.enc, 'eos_token_id') and token_id == self.enc.eos_token_id:
+                    break
 
     def load_variant(self, variant_name: str):
         """Dynamically loads and swaps a LoRA Adapter without clearing base VRAM."""

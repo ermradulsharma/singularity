@@ -1,7 +1,10 @@
 import os
 import yaml
 import torch
+import json
+import asyncio
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 import tiktoken
 import sys
@@ -9,45 +12,28 @@ import safetensors.torch
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.model import GPTLanguageModel
+from src.inference import AGIInferenceEngine
 
-app = FastAPI(title="Independent GenAI Model API", version="1.0", description="Production API for custom Foundation Model")
+app = FastAPI(title="Singularity AGI High-Throughput Serving API", version="2.0", description="Production OpenAPI serving endpoint for Singularity AGI Foundation Engine")
 
 def load_config(config_path="config/config.yaml"):
-    with open(config_path, "r") as file:
-        return yaml.safe_load(file)
+    if os.path.exists(config_path):
+        with open(config_path, "r") as file:
+            return yaml.safe_load(file)
+    return {
+        'model': {'n_embd': 4096, 'n_head': 32, 'n_kv_head': 8, 'n_layer': 32, 'block_size': 2048, 'num_experts': 4, 'num_experts_per_tok': 2, 'dropout': 0.0},
+        'paths': {'model_save': 'models/smollm_agi.safetensors'}
+    }
 
 config = load_config()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = None
-tokenizer = None
+engine = None
 
 @app.on_event("startup")
 async def startup_event():
-    global model, tokenizer
-    
-    tokenizer = tiktoken.get_encoding("gpt2")
-    vocab_size = tokenizer.n_vocab + 6
-    
-    model = GPTLanguageModel(
-        vocab_size=vocab_size,
-        n_embd=config['model']['n_embd'],
-        n_head=config['model']['n_head'],
-        n_kv_head=config['model']['n_kv_head'],
-        n_layer=config['model']['n_layer'],
-        block_size=config['model']['block_size'],
-        num_experts=config['model']['num_experts'],
-        num_experts_per_tok=config['model']['num_experts_per_tok'],
-        dropout=config['model']['dropout']
-    )
-    
-    model_path = config['paths']['model_save']
-    if os.path.exists(model_path):
-        model.load_state_dict(safetensors.torch.load_file(model_path, device=str(device)))
-    else:
-        pass
-    model.to(device)
-    model.eval()
+    global engine
+    engine = AGIInferenceEngine()
 
 class GenerateRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=8_000)
@@ -67,61 +53,82 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     generated_text: str
 
-from fastapi.responses import StreamingResponse
-import asyncio
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str = "singularity-agi"
+    messages: list[ChatMessage]
+    temperature: float = Field(default=0.7, ge=0.05, le=2.0)
+    max_tokens: int = Field(default=256, ge=1, le=2048)
+    stream: bool = False
+
+@app.get("/v1/models")
+def list_models():
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "singularity-agi",
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "singularity-agi-engine"
+            }
+        ]
+    }
 
 @app.post("/v1/generate", response_model=GenerateResponse)
 def generate_text(request: GenerateRequest):
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model is not loaded properly.")
+    if engine is None or engine.model is None:
+        raise HTTPException(status_code=500, detail="Engine is not booted properly.")
         
     prompt = f"Instruction: {request.instruction}\n"
     if request.input_text:
         prompt += f"Input: {request.input_text}\n"
     prompt += "Output:"
     
-    context_tokens = tokenizer.encode(prompt, disallowed_special=())
-    if len(context_tokens) > model.block_size:
-        raise HTTPException(status_code=413, detail="Encoded prompt exceeds model context limit.")
-    context_tensor = torch.tensor([context_tokens], dtype=torch.long, device=device)
-    
-    with torch.no_grad():
-        generated_idx = model.generate(
-            context_tensor, 
-            max_new_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_k=request.top_k,
-            top_p=request.top_p,
-            agentic_mode=False
-        )[0].tolist()
-        
-    full_output = tokenizer.decode(generated_idx)
+    full_output = engine.generate_response(prompt, max_new_tokens=request.max_tokens)
     return GenerateResponse(generated_text=full_output)
 
-@app.post("/v1/chat/stream")
-async def stream_text(request: GenerateRequest):
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model is not loaded properly.")
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    if engine is None or engine.model is None:
+        raise HTTPException(status_code=500, detail="Engine is not booted properly.")
         
-    prompt = f"Instruction: {request.instruction}\nOutput:"
-    context_tokens = tokenizer.encode(prompt, disallowed_special=())
-    context_tensor = torch.tensor([context_tokens], dtype=torch.long, device=device)
-    
-    async def token_generator():
-        with torch.no_grad():
-            generated_idx = model.generate(
-                context_tensor,
-                max_new_tokens=request.max_tokens,
-                temperature=request.temperature,
-                agentic_mode=False
-            )[0].tolist()
-            
-        for token_id in generated_idx[len(context_tokens):]:
-            token_str = tokenizer.decode([token_id])
-            yield f"data: {token_str}\n\n"
-            await asyncio.sleep(0.01)
-        yield "data: [DONE]\n\n"
+    prompt = ""
+    for msg in request.messages:
+        prompt += f"{msg.role.capitalize()}: {msg.content}\n"
+    prompt += "Assistant:"
 
-    return StreamingResponse(token_generator(), media_type="text/event-stream")
+    if request.stream:
+        async def event_generator():
+            for tok_str in engine.generate_response_stream(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature):
+                data_chunk = {
+                    "id": "chatcmpl-singularity",
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": request.model,
+                    "choices": [{"delta": {"content": tok_str}, "index": 0, "finish_reason": None}]
+                }
+                yield f"data: {json.dumps(data_chunk)}\n\n"
+                await asyncio.sleep(0.001)
+            yield "data: [DONE]\n\n"
 
-
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+    else:
+        full_text = engine.generate_response(prompt, max_new_tokens=request.max_tokens)
+        return {
+            "id": "chatcmpl-singularity",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": request.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": full_text},
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(full_text.split()), "total_tokens": len(prompt.split()) + len(full_text.split())}
+        }

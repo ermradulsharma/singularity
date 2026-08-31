@@ -28,7 +28,13 @@ class CognitiveTelemetry:
         except Exception as e:
             pass
             
-        sys.stdout.write(f"[{level.upper()}] [{module}] {message}\n")
+        try:
+            sys.stdout.write(f"[{level.upper()}] [{module}] {message}\n")
+            sys.stdout.flush()
+        except (UnicodeEncodeError, AttributeError):
+            clean_msg = message.encode(getattr(sys.stdout, 'encoding', 'utf-8') or 'utf-8', errors='replace').decode(getattr(sys.stdout, 'encoding', 'utf-8') or 'utf-8')
+            sys.stdout.write(f"[{level.upper()}] [{module}] {clean_msg}\n")
+            sys.stdout.flush()
 
 logger = CognitiveTelemetry()
 
