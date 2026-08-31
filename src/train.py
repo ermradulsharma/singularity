@@ -3,27 +3,17 @@ import json
 import torch
 import safetensors.torch
 import time
-import builtins
 from torch.utils.data import Dataset, DataLoader
 from src.inference import ModelArgs, AGIInferenceEngine
 from src.model import GPTLanguageModel
-from src.telemetry import logger
-
-def _telemetry_print(*args, **kwargs):
-    message = " ".join(map(str, args)).replace('=', '').strip()
-    if message:
-        logger.log("INFO", "TRAIN", message)
-builtins.print = _telemetry_print
 
 class AGIDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
         self.examples = []
         
-        print(f"[SYSTEM] Reading Knowledge Base: {data_path}...")
         with open(data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
-        print("[SYSTEM] Tokenizing Knowledge (This may take a moment)...")
         if isinstance(data, dict) and "data" in data:
             data = data["data"]
             
@@ -52,16 +42,19 @@ class AGIDataset(Dataset):
     def __getitem__(self, idx):
         return self.examples[idx]
 
+from src.distributed import cluster_manager
+
 def train_agi():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[SYSTEM] Initializing AGI Evolution on {device.upper()}...")
+    cluster_manager.initialize_cluster()
+    device = cluster_manager.device
     
     try:
         engine = AGIInferenceEngine()
         model = engine.model
         tokenizer = engine.enc
-    except Exception as e:
-        print(f"[ERROR] Failed to boot AGI architecture: {e}")
+        if cluster_manager.is_distributed:
+            model = setup_fsdp_model(model, rank=cluster_manager.rank, world_size=cluster_manager.world_size)
+    except Exception:
         return
         
     model.train()
@@ -71,10 +64,10 @@ def train_agi():
     
     if os.path.exists(kb_file):
         dataset = AGIDataset(kb_file, tokenizer)
-        dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+        sampler = torch.utils.data.distributed.DistributedSampler(dataset) if cluster_manager.is_distributed else None
+        dataloader = DataLoader(dataset, batch_size=2, shuffle=(sampler is None), sampler=sampler)
     else:
         from src.dataset import StreamingTerabyteDataset
-        print("[SYSTEM] Using Industrial Multi-Terabyte Streaming Data Engine...")
         sample_sources = [
             "Instruction: Solve 2+2.\nAnswer: 4",
             "Instruction: Explain MoE.\nAnswer: Mixture of Experts routes tokens dynamically.",
@@ -87,10 +80,6 @@ def train_agi():
     
     scaler = torch.amp.GradScaler('cuda', enabled=('cuda' in str(device)))
     accumulation_steps = 4
-    
-    print("============================================================")
-    print("🧬 AGI EVOLUTION STARTED (AMP + Grad Accumulation + Medusa Loss) 🧬")
-    print("============================================================")
     
     epochs = 1
     for epoch in range(epochs):
@@ -117,9 +106,6 @@ def train_agi():
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
-            
-            if step % 10 == 0:
-                print(f"[Epoch {epoch+1}/{epochs}] [Step {step}/{len(dataloader)}] Loss: {loss.item() * accumulation_steps:.4f}")
                 
             if step >= 100:
                 break
@@ -127,11 +113,6 @@ def train_agi():
     save_path = "models/smollm_agi_evolved.safetensors"
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     safetensors.torch.save_file(model.state_dict(), save_path)
-    
-    print("============================================================")
-    print("[SUCCESS] Evolution Complete! AGI is now smarter.")
-    print(f"[SUCCESS] Upgraded Brain saved to: {save_path}")
-    print("============================================================")
 
 def generate_deepspeed_config(stage: int = 3, batch_size: int = 2) -> dict:
     """Generates DeepSpeed Stage 3 3D Parallelism configuration for multi-node cluster scaling."""

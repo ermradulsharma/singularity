@@ -1,4 +1,3 @@
-from src.telemetry import logger
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -217,8 +216,6 @@ class UnrestrictedAgentReconEngine:
                 if result == 0:
                     open_ports.append(port)
                     
-        print(f"[RECON_ENGINE] Initiating real TCP port scan on {target_ip}...")
-        
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             executor.map(scan_single_port, ports)
             

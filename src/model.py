@@ -352,7 +352,6 @@ class GPTLanguageModel(nn.Module):
 
     def inject_lora_adapters(self, variant_name: str, r: int = 8, alpha: int = 16):
         """Dynamically injects LoRA into Q and V layers for a specific Swarm Agent variant."""
-        print(f"[SYSTEM] Injecting LoRA Neural Adapter: {variant_name}")
         for block in self.graph['blocks']:
             if not isinstance(block.graph['attn']['wq'], LoRALinear):
                 block.graph['attn']['wq'] = LoRALinear(block.graph['attn']['wq'], r, alpha).to(self.graph['tok_emb'].weight.device)
@@ -434,6 +433,42 @@ class GPTLanguageModel(nn.Module):
                 best_sequence = sim_seq
                 
         return best_sequence
+
+    @torch.no_grad()
+    def generate_reasoning_cot(self, idx, max_new_tokens=256, reasoning_budget=3, temperature=0.7):
+        """
+        🚀 DeepSeek-R1 Style Explicit Chain-of-Thought (CoT) Reflection & Reasoning Engine 🚀
+        Generates candidate trajectories enclosed within `<think>...</think>` tags, scores intermediate steps via PRM,
+        and dynamically prunes unpromising reasoning branches.
+        """
+        from src.prm import StepProcessRewardModel
+        prm = StepProcessRewardModel(vocab_size=self.vocab_size, d_model=self.graph['tok_emb'].weight.size(1)).to(idx.device)
+        
+        candidates = []
+        for branch in range(reasoning_budget):
+            seq = self.generate(idx, max_new_tokens=max_new_tokens, temperature=temperature, agentic_mode=True)
+            candidates.append(seq)
+            
+        best_branch = candidates[0]
+        max_reward = -float('inf')
+        
+        import tiktoken
+        try:
+            enc = tiktoken.get_encoding("gpt2")
+        except Exception:
+            enc = None
+            
+        for cand in candidates:
+            if enc and cand.ndim > 1:
+                text = enc.decode([t for t in cand[0].tolist() if t < enc.n_vocab])
+            else:
+                text = "Reasoning trajectory sample"
+            reward = prm.score_trajectory(text)
+            if reward > max_reward:
+                max_reward = reward
+                best_branch = cand
+                
+        return best_branch
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, 

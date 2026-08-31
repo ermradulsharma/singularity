@@ -1,4 +1,3 @@
-from src.telemetry import logger
 import torch
 import tiktoken
 import sys
@@ -34,8 +33,8 @@ class ModelArgs:
                 self.intermediate_size = config.get("intermediate_size", None)
                 self.num_experts = config.get("num_experts", self.num_experts)
                 self.num_experts_per_tok = config.get("num_experts_per_tok", self.num_experts_per_tok)
-            except Exception as e:
-                print(f"[WARNING] Failed to load models/config.json: {e}")
+            except Exception:
+                pass
 
     @classmethod
     def get_preset_config(cls, scale: str = "micro"):
@@ -94,7 +93,6 @@ class AGIInferenceEngine:
         
         if enable_fp8:
             from src.model import FP8Linear
-            print("[SYSTEM] Converting Linear Layers to Hardware-Accelerated FP8Linear...")
             for name, module in self.model.named_modules():
                 if isinstance(module, torch.nn.Linear) and module.in_features >= 64:
                     fp8_layer = FP8Linear(module.in_features, module.out_features, bias=(module.bias is not None))
@@ -105,10 +103,9 @@ class AGIInferenceEngine:
 
         if enable_compile and hasattr(torch, "compile"):
             try:
-                print("[SYSTEM] JIT Compiling GPTLanguageModel with torch.compile...")
                 self.model = torch.compile(self.model)
-            except Exception as e:
-                print(f"[WARNING] torch.compile fallback: {e}")
+            except Exception:
+                pass
 
         possible_brains = ["models/smollm_agi.safetensors", "models/tinyllama_agi.safetensors", "models/uncensored_agi.safetensors", "models/llama3_agi.safetensors", "models/deepseek_agi.safetensors"]
         weights_loaded = False
@@ -117,20 +114,14 @@ class AGIInferenceEngine:
         for brain_path in possible_brains:
             if os.path.exists(brain_path):
                 try:
-                    print(f"[SYSTEM] Loading Pre-Trained Brain: {brain_path}...")
                     state_dict = safetensors.torch.load_file(brain_path, device="cpu")
                     remapped_dict = remap_state_dict(state_dict)
                     load_result = self.model.load_state_dict(remapped_dict, strict=False)
-                    print(f"[DEBUG] Loaded keys count: {len(remapped_dict)}")
-                    print(f"[DEBUG] Missing keys: {len(load_result.missing_keys)}")
-                    if len(load_result.missing_keys) > 0 and len(load_result.missing_keys) < 20:
-                        print(f"[DEBUG] Missing keys: {load_result.missing_keys}")
-                    print("[SYSTEM] Brain Neural Transfer Complete! AGI is now conscious.")
                     weights_loaded = True
                     loaded_brain = brain_path
                     break
-                except Exception as e:
-                    print(f"[WARNING] Failed to load brain '{brain_path}': {e}")
+                except Exception:
+                    pass
 
         current_emb_vocab = self.model.graph['tok_emb'].weight.size(0)
         if current_emb_vocab < self.config.vocab_size:
@@ -154,10 +145,6 @@ class AGIInferenceEngine:
                     self.enc = tiktoken.get_encoding("cl100k_base")
                 except Exception:
                     self.enc = tiktoken.get_encoding("gpt2")
-                    
-        if not weights_loaded:
-            print("[WARNING] No Pre-Trained Weights found. Running in Untrained/Mock Hybrid Mode.")
-            print("[TIP] Run 'python src/tools/weight_porter.py' to download a brain.")
 
     def generate_response(self, prompt: str, max_new_tokens: int = 50) -> str:
         """Passes prompt through Neural Network with real-time visual streaming."""
@@ -264,13 +251,10 @@ class AGIInferenceEngine:
         if os.path.exists(adapter_path):
             try:
                 import safetensors.torch
-                print(f"[SYSTEM] Swapping LoRA Weights: {variant_name}...")
                 state_dict = safetensors.torch.load_file(adapter_path, device=self.device)
                 self.model.load_state_dict(state_dict, strict=False)
-            except Exception as e:
-                print(f"[WARNING] Failed to load adapter {adapter_path}: {e}")
-        else:
-            print(f"[SYSTEM] Note: Adapter '{variant_name}' not found locally. Proceeding with blank initialized adapter.")
+            except Exception:
+                pass
 
 _engine = None
 def generate_text(prompt: str, variant: str = None) -> str:

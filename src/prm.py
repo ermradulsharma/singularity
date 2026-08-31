@@ -6,7 +6,7 @@ import ast
 
 class NeuralStepEncoder(nn.Module):
     """Deep Transformer sequence encoder for token-level Process Reward Model scoring."""
-    def __init__(self, vocab_size: int = 50257, d_model: int = 128, n_head: int = 4):
+    def __init__(self, vocab_size: int = 128256, d_model: int = 128, n_head: int = 4):
         super().__init__()
         self.tok_emb = nn.Embedding(vocab_size, d_model)
         self.pos_emb = nn.Parameter(torch.randn(1, 256, d_model))
@@ -32,7 +32,7 @@ class StepProcessRewardModel(nn.Module):
     Process Reward Model (PRM) for step-by-step intermediate Chain-of-Thought (CoT) reasoning verification.
     Inspired by DeepSeek-R1 Process-Reward Guided Reinforcement Learning & Math PRMs.
     """
-    def __init__(self, vocab_size: int = 50257, d_model: int = 128):
+    def __init__(self, vocab_size: int = 128256, d_model: int = 128):
         super().__init__()
         self.d_model = d_model
         self.neural_encoder = NeuralStepEncoder(vocab_size=vocab_size, d_model=d_model)
@@ -102,10 +102,10 @@ class StepProcessRewardModel(nn.Module):
                 continue
             
             # Heuristic & Formal Verification component
-            h_score = 0.4
+            h_score = 0.5
             if "Error" in step_clean or "Exception" in step_clean or "Traceback" in step_clean:
                 h_score -= 0.4
-            if "Thought:" in step_clean or "Observation:" in step_clean or "<think>" in step_clean:
+            if "Thought:" in step_clean or "Observation:" in step_clean or "Code:" in step_clean or "<think>" in step_clean:
                 h_score += 0.2
             if "Final Answer:" in step_clean or "Therefore" in step_clean or "\\boxed" in step_clean:
                 h_score += 0.2

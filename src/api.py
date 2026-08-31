@@ -3,6 +3,7 @@ import yaml
 import torch
 import json
 import asyncio
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -87,6 +88,11 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.05, le=2.0)
     max_tokens: int = Field(default=256, ge=1, le=2048)
     stream: bool = False
+
+@app.get("/health")
+@app.get("/v1/health")
+def health_check():
+    return {"status": "healthy", "engine": "singularity-agi-v2"}
 
 @app.get("/v1/models")
 def list_models():
