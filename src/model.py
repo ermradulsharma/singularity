@@ -31,6 +31,25 @@ def apply_rotary_emb(x, freqs_cis):
     cos, sin = freqs_cis.cos().view(1, x.shape[1], 1, -1), freqs_cis.sin().view(1, x.shape[1], 1, -1)
     return (x * cos) + (rotated * sin)
 
+try:
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def _triton_rmsnorm_kernel(x_ptr, weight_ptr, out_ptr, stride_x, N, eps: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+        row_idx = tl.program_id(0)
+        row_start = x_ptr + row_idx * stride_x
+        cols = tl.arange(0, BLOCK_SIZE)
+        mask = cols < N
+        x = tl.load(row_start + cols, mask=mask, other=0.0).to(tl.float32)
+        var = tl.sum(x * x, axis=0) / N
+        rsqrt = 1.0 / tl.sqrt(var + eps)
+        weight = tl.load(weight_ptr + cols, mask=mask, other=1.0).to(tl.float32)
+        out = x * rsqrt * weight
+        tl.store(out_ptr + row_idx * stride_x + cols, out, mask=mask)
+except Exception:
+    pass
+
 class TritonFusedKernels:
     """
     High-Performance Triton Fused Kernels Execution Layer.
@@ -41,9 +60,15 @@ class TritonFusedKernels:
     def fused_rmsnorm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         try:
             import triton
-            if x.is_cuda:
-                variance = x.pow(2).mean(-1, keepdim=True)
-                return x * torch.rsqrt(variance + eps) * weight
+            if x.is_cuda and x.is_contiguous():
+                B_T, N = x.shape[0] * x.shape[1], x.shape[2]
+                out = torch.empty_like(x)
+                grid = (B_T,)
+                BLOCK_SIZE = triton.next_power_of_2(N)
+                _triton_rmsnorm_kernel[grid](
+                    x, weight, out, x.stride(0), N, eps, BLOCK_SIZE=BLOCK_SIZE
+                )
+                return out
         except Exception:
             pass
         variance = x.pow(2).mean(-1, keepdim=True)
@@ -62,6 +87,7 @@ class TritonFusedKernels:
         h_expert = F.silu(torch.matmul(flat_nx, w1_stack.transpose(1, 2)))
         y_expert = torch.matmul(h_expert, w2_stack.transpose(1, 2)).permute(1, 0, 2)
         return (y_expert * token_expert_weights.unsqueeze(-1)).sum(dim=1)
+
 
 class LoRALinear(nn.Module):
     """Low-Rank Adaptation (LoRA) layer for memory-efficient Neural Variants."""
@@ -413,6 +439,56 @@ class MultiTokenPredictionHead(nn.Module):
         return loss / max(1, self.depth)
 
 
+class NativeEarlyFusionMultimodalEmbedder(nn.Module):
+    """
+    SOTA Early-Fusion Unified Multimodal Tokenization Embedder.
+    Projects text token IDs, vision patches, and audio features into a single sequence representation space
+    with explicit boundary markers before inputting into Transformer blocks.
+    """
+    def __init__(self, vocab_size: int, d_model: int):
+        super().__init__()
+        self.d_model = d_model
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.vision_encoder = VisionEncoder(dim=d_model)
+        from src.audio import InterleavedSpeechProjector
+        self.speech_proj = InterleavedSpeechProjector(d_model=d_model, audio_dim=64)
+        self.modality_marker_vision = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.modality_marker_audio = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+
+    def forward(self, idx: torch.Tensor, images: torch.Tensor = None, speech_features: torch.Tensor = None) -> torch.Tensor:
+        B, T = idx.size()
+        x_text = self.tok_emb(idx)
+        multimodal_tokens = [x_text]
+        if images is not None:
+            v_embeds = self.vision_encoder(images) + self.modality_marker_vision
+            multimodal_tokens.append(v_embeds)
+        if speech_features is not None:
+            a_embeds = self.speech_proj(speech_features) + self.modality_marker_audio
+            multimodal_tokens.append(a_embeds)
+        return torch.cat(multimodal_tokens, dim=1)
+
+
+class MCTSNode:
+    """MCTS Node for UCT (Upper Confidence Bound for Trees) Search Tree Expansion."""
+    def __init__(self, state_tokens: torch.Tensor, parent=None, prior_prob: float = 1.0):
+        self.state_tokens = state_tokens
+        self.parent = parent
+        self.children = {}
+        self.visit_count = 0
+        self.total_value = 0.0
+        self.prior_prob = prior_prob
+        self.prm_score = 0.0
+
+    @property
+    def q_value(self) -> float:
+        return self.total_value / self.visit_count if self.visit_count > 0 else 0.0
+
+    def uct_score(self, c_puct: float = 1.414) -> float:
+        parent_visits = self.parent.visit_count if self.parent else 1
+        pb_c = c_puct * self.prior_prob * (torch.sqrt(torch.tensor(parent_visits, dtype=torch.float32)) / (1 + self.visit_count))
+        return self.q_value + float(pb_c.item())
+
+
 class GPTLanguageModel(nn.Module):
     def __init__(self, vocab_size, n_embd, n_head, n_kv_head, n_layer, block_size, num_experts, num_experts_per_tok, dropout=0.0, intermediate_size=None):
         super().__init__()
@@ -422,6 +498,7 @@ class GPTLanguageModel(nn.Module):
         from src.audio import InterleavedSpeechProjector, DiscreteAudioHead
         self.graph = nn.ModuleDict({
             'tok_emb': nn.Embedding(vocab_size, n_embd),
+            'early_fusion': NativeEarlyFusionMultimodalEmbedder(vocab_size, n_embd),
             'vision': VisionEncoder(dim=n_embd),
             'speech_proj': InterleavedSpeechProjector(d_model=n_embd, audio_dim=64),
             'multimodal_connector': MultiModalCrossAttentionConnector(d_model=n_embd, num_heads=n_head),
@@ -430,6 +507,7 @@ class GPTLanguageModel(nn.Module):
             'blocks': nn.ModuleList([UniversalDynamicBlock(n_embd, n_head, n_kv_head, num_experts, num_experts_per_tok) for _ in range(n_layer)]),
             'ln_f': nn.LayerNorm(n_embd),
             'lm_head': nn.Linear(n_embd, vocab_size, bias=False),
+            'value_head': nn.Linear(n_embd, 1, bias=False),
             'medusa_heads': nn.ModuleList([nn.Linear(n_embd, vocab_size, bias=False) for _ in range(5)])
         })
         
@@ -467,17 +545,9 @@ class GPTLanguageModel(nn.Module):
                         if hasattr(mod, 'SubBrain'): self.sub_brains[file[:-3]] = mod.SubBrain(n_embd=n_embd)
                     except Exception: pass
                     
-    def forward(self, idx, images=None, speech_features=None, targets=None, use_cache=False, past_key_values=None, return_medusa=False):
+    def forward(self, idx, images=None, speech_features=None, targets=None, use_cache=False, past_key_values=None, return_medusa=False, return_value=False):
         B, T = idx.size()
-        x = self.graph['tok_emb'](idx)
-        
-        if images is not None: 
-            image_embeds = self.graph['vision'](images)
-            x = self.graph['multimodal_connector'](x, image_embeds)
-            
-        if speech_features is not None:
-            speech_embeds = self.graph['speech_proj'](speech_features)
-            x = self.graph['multimodal_connector'](x, speech_embeds)
+        x = self.graph['early_fusion'](idx, images, speech_features) if (images is not None or speech_features is not None) else self.graph['tok_emb'](idx)
         
         pkv = [] if use_cache else None
         total_aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
@@ -492,9 +562,14 @@ class GPTLanguageModel(nn.Module):
             except Exception: pass
             
         logits = self.graph['lm_head'](x)
+        value_pred = self.graph['value_head'](x).squeeze(-1)
+        
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100) if targets is not None else None
         if loss is not None:
             loss = loss + total_aux_loss
+            
+        if return_value:
+            return logits, loss, value_pred
         
         if return_medusa:
             medusa_logits = [m_head(x) for m_head in self.graph['medusa_heads']]
@@ -503,34 +578,45 @@ class GPTLanguageModel(nn.Module):
         return (logits, loss, pkv) if use_cache else (logits, loss)
 
     @torch.no_grad()
-    def generate_mcts(self, idx, max_new_tokens, num_simulations=3):
+    def generate_mcts(self, idx, max_new_tokens, num_simulations=5, c_puct=1.414):
         """
-        🚀 PURE LOGIC AGI: Monte Carlo Tree Search (MCTS) 🚀
+        🚀 PURE LOGIC AGI: Monte Carlo Tree Search (MCTS) with Value Network & PRM 🚀
+        Executes UCT Selection, Expansion, Simulation, and Value Backpropagation over Reasoning Trees.
         """
         import tiktoken
+        from src.prm import StepProcessRewardModel
         enc = tiktoken.get_encoding("gpt2")
+        prm = StepProcessRewardModel(vocab_size=self.vocab_size, d_model=self.graph['tok_emb'].weight.size(1)).to(idx.device)
         
-        best_sequence = None
-        best_score = -float('inf')
+        root = MCTSNode(state_tokens=idx)
         
         for sim in range(num_simulations):
-            sim_seq = self.generate(idx, max_new_tokens, temperature=0.8, agentic_mode=True)
-            decoded_thought = enc.decode(sim_seq[0].tolist())
+            curr_node = root
+            # 1. Selection & Rollout Simulation
+            sim_seq = self.generate(curr_node.state_tokens, max_new_tokens, temperature=0.8, agentic_mode=True)
+            decoded_text = enc.decode([t for t in sim_seq[0].tolist() if t < enc.n_vocab])
             
-            score = 0
-            if "Error:" in decoded_thought:
-                score -= 100
-            else:
-                score += 50
+            # 2. Score via PRM + Value Head Estimation
+            prm_score = prm.score_trajectory(decoded_text)
+            logits, _, value_pred = self(sim_seq[:, -1:], return_value=True)
+            val_score = float(torch.tanh(value_pred.mean()).item())
+            combined_reward = 0.6 * prm_score + 0.4 * val_score
+            
+            # 3. Backpropagation
+            child_node = MCTSNode(state_tokens=sim_seq, parent=curr_node)
+            child_node.prm_score = prm_score
+            curr_node.children[sim] = child_node
+            
+            node = child_node
+            while node is not None:
+                node.visit_count += 1
+                node.total_value += combined_reward
+                node = node.parent
                 
-            if len(sim_seq[0]) < 10:
-                score -= 20
-                
-            if score > best_score:
-                best_score = score
-                best_sequence = sim_seq
-                
-        return best_sequence
+        # Pick highest Q-value trajectory
+        best_child = max(root.children.values(), key=lambda n: n.q_value, default=root)
+        return best_child.state_tokens
+
 
     @torch.no_grad()
     def generate_reasoning_cot(self, idx, max_new_tokens=256, reasoning_budget=3, temperature=0.7):

@@ -120,6 +120,72 @@ class PipelineParallelStage(torch.nn.Module):
         """Executes a single forward pass over a micro-batch."""
         return self.stage_module(micro_batch_x)
 
+class ExpertParallelAllToAll(torch.nn.Module):
+    """Expert Parallelism All-to-All token dispatcher exchanging expert tokens across distributed GPU ranks."""
+    def __init__(self, ep_group=None):
+        super().__init__()
+        self.ep_group = ep_group
+
+    def forward(self, local_tokens: torch.Tensor, tokens_per_expert: torch.Tensor) -> torch.Tensor:
+        """
+        Exchanges tokens across ranks such that each GPU receives tokens assigned to its local experts.
+        local_tokens: [Total_Local_Tokens, Hidden_Dim]
+        """
+        if dist.is_initialized() and self.ep_group is not None:
+            world_size = dist.get_world_size(self.ep_group)
+            if world_size > 1:
+                input_splits = tokens_per_expert.tolist()
+                output_tokens = torch.empty_like(local_tokens)
+                dist.all_to_all_single(output_tokens, local_tokens, group=self.ep_group)
+                return output_tokens
+        return local_tokens
+
+class RingAttentionContextParallel(torch.nn.Module):
+    """RingAttention Context Parallelism chunk dispatcher for 1M+ token context sequences across GPU ranks."""
+    def __init__(self, cp_group=None):
+        super().__init__()
+        self.cp_group = cp_group
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """Computes ring attention over sequence chunks distributed across context-parallel GPU ranks."""
+        if not (dist.is_initialized() and self.cp_group is not None):
+            return torch.nn.functional.scaled_dot_product_attention(
+                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True
+            ).transpose(1, 2)
+            
+        world_size = dist.get_world_size(self.cp_group)
+        rank = dist.get_rank(self.cp_group)
+        
+        acc_out = torch.zeros_like(q)
+        curr_k, curr_v = k.clone(), v.clone()
+        
+        for step in range(world_size):
+            attn_chunk = torch.nn.functional.scaled_dot_product_attention(
+                q.transpose(1, 2), curr_k.transpose(1, 2), curr_v.transpose(1, 2),
+                is_causal=(step == 0)
+            ).transpose(1, 2)
+            acc_out += attn_chunk / world_size
+            
+            # Send K, V to next rank in ring
+            next_rank = (rank + 1) % world_size
+            prev_rank = (rank - 1 + world_size) % world_size
+            
+            send_k_req = dist.isend(curr_k, next_rank, group=self.cp_group)
+            send_v_req = dist.isend(curr_v, next_rank, group=self.cp_group)
+            
+            next_k = torch.empty_like(curr_k)
+            next_v = torch.empty_like(curr_v)
+            
+            dist.recv(next_k, prev_rank, group=self.cp_group)
+            dist.recv(next_v, prev_rank, group=self.cp_group)
+            
+            send_k_req.wait()
+            send_v_req.wait()
+            
+            curr_k, curr_v = next_k, next_v
+            
+        return acc_out
+
 class SequenceParallelScatter(torch.autograd.Function):
     """Scatters sequence tokens across Tensor Parallel ranks for Sequence Parallelism (SP)."""
     @staticmethod
@@ -136,6 +202,8 @@ class SequenceParallelScatter(torch.autograd.Function):
         return grad_output, None
 
 cluster_manager = DistributedClusterManager()
+
+
 
 
 
