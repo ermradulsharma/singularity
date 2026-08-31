@@ -167,3 +167,67 @@ class GroupRewardEvaluator:
         return torch.tensor(rewards, dtype=torch.float32)
 
 
+class MCTSNode:
+    """Node in the Monte Carlo Reasoning Search Tree."""
+    def __init__(self, state_text: str, parent=None):
+        self.state_text = state_text
+        self.parent = parent
+        self.children = []
+        self.visits = 0
+        self.value = 0.0
+
+    def ucb_score(self, c_puct: float = 1.41) -> float:
+        if self.visits == 0:
+            return float('inf')
+        import math
+        return (self.value / self.visits) + c_puct * math.sqrt(math.log(self.parent.visits) / self.visits)
+
+
+class MCTSReasoningSearch:
+    """
+    PRM-Guided Monte Carlo Tree Search Engine for CoT reasoning step expansion.
+    Selects, expands, and evaluates intermediate step trajectories using PRM step scores.
+    """
+    def __init__(self, prm: StepProcessRewardModel = None):
+        self.prm = prm if prm is not None else StepProcessRewardModel()
+
+    def search_best_trajectory(self, prompt: str, candidate_step_generator, num_simulations: int = 8) -> str:
+        """Runs MCTS rollouts guided by StepProcessRewardModel scores to find the highest-quality reasoning path."""
+        root = MCTSNode(state_text=prompt)
+        
+        for _ in range(num_simulations):
+            node = root
+            # 1. Selection
+            while node.children:
+                node = max(node.children, key=lambda child: child.ucb_score())
+
+            # 2. Expansion
+            candidate_steps = candidate_step_generator(node.state_text)
+            if not candidate_steps:
+                break
+            for step_text in candidate_steps:
+                next_text = node.state_text + "\n" + step_text
+                child_node = MCTSNode(state_text=next_text, parent=node)
+                node.children.append(child_node)
+
+            if node.children:
+                node = node.children[0]
+
+            # 3. Evaluation via Process Reward Model
+            reward = self.prm.score_trajectory(node.state_text)
+
+            # 4. Backpropagation
+            curr = node
+            while curr is not None:
+                curr.visits += 1
+                curr.value += reward
+                curr = curr.parent
+
+        # Select child with highest average value
+        if not root.children:
+            return prompt
+        best_child = max(root.children, key=lambda c: (c.value / max(1, c.visits)))
+        return best_child.state_text
+
+
+

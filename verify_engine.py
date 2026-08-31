@@ -128,11 +128,35 @@ def test_fulfilled_gaps():
     print("✅ Column & Row Tensor Parallel Linear layers verified.")
 
     # 3. GRPO Group Reward Evaluator
-    from src.prm import GroupRewardEvaluator
+    from src.prm import GroupRewardEvaluator, MCTSReasoningSearch
     evaluator = GroupRewardEvaluator()
     rewards = evaluator.evaluate_group(["<think>Step 1</think>\nAnswer: 4", "Bad answer"])
     assert rewards.shape[0] == 2
     print("✅ GRPO Multi-Objective Group Reward Evaluator verified.")
+
+    # 4. Sovereign Weight Assimilator
+    from src.weight_assimilator import SovereignWeightAssimilator
+    from src.model import GPTLanguageModel
+    dummy_model = GPTLanguageModel(vocab_size=1000, n_embd=32, n_head=2, n_kv_head=1, n_layer=1, block_size=128, num_experts=1, num_experts_per_tok=1)
+    assimilator = SovereignWeightAssimilator(dummy_model)
+    res = assimilator.align_and_load_safetensors("nonexistent.safetensors")
+    assert res["status"] == "error"
+    print("✅ Sovereign Weight Assimilator & Tensor Mapping verified.")
+
+    # 5. Vector Semantic Memory RAG
+    from src.memory import VectorSemanticMemory
+    v_mem = VectorSemanticMemory(memory_file="data/test_semantic_memory.safetensors", emb_dim=32)
+    v_mem.store_text("Quantum computing uses qubits")
+    passages = v_mem.search_semantic("qubits computing", top_k=1)
+    assert len(passages) >= 1
+    print("✅ Vector Semantic Memory RAG search verified.")
+
+    # 6. MCTS Reasoning Search
+    mcts_search = MCTSReasoningSearch()
+    best_path = mcts_search.search_best_trajectory("Instruction: Solve 2+2", lambda s: ["Step: 2+2=4"], num_simulations=2)
+    assert "2+2=4" in best_path
+    print("✅ PRM-Guided MCTS Reasoning Search verified.")
+
 
 def test_perfection_100_percent():
     print("\n[VERIFICATION] Testing 100% SOTA Perfection Modules...")

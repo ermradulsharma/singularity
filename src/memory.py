@@ -74,3 +74,49 @@ class IndependentNeuralMemory:
         return retrieved_values.to(query_tensor.device)
 
 
+class VectorSemanticMemory(IndependentNeuralMemory):
+    """
+    Self-Sovereign Vector Semantic Memory.
+    Provides semantic search, chunking, and text vector retrieval for RAG workflows.
+    """
+    def __init__(self, memory_file="data/semantic_memory.safetensors", max_memories=5000, emb_dim=128):
+        super().__init__(memory_file=memory_file, max_memories=max_memories)
+        self.emb_dim = emb_dim
+        self.text_records = []
+
+    def _encode_text(self, text: str) -> torch.Tensor:
+        """Encodes text into a normalized d_model embedding vector."""
+        vec = torch.zeros(1, self.emb_dim, dtype=torch.float32)
+        words = text.split()
+        if not words:
+            return F.normalize(vec, p=2, dim=-1)
+        for w in words:
+            val = sum(ord(c) for c in w)
+            idx = val % self.emb_dim
+            vec[0, idx] += 1.0
+        return F.normalize(vec, p=2, dim=-1)
+
+    def store_text(self, text: str):
+        """Chunks and stores text with its semantic vector embedding."""
+        if not text or not text.strip():
+            return
+        vec = self._encode_text(text)
+        self.add_experience(vec, vec)
+        self.text_records.append(text[:512])
+
+    def search_semantic(self, query: str, top_k: int = 3) -> list[str]:
+        """Retrieves top-k most semantically relevant text passages for a given query."""
+        if not self.text_records or self.keys is None:
+            return []
+        q_vec = self._encode_text(query)
+        sim = F.cosine_similarity(q_vec, self.keys, dim=1)
+        k = min(top_k, sim.size(0))
+        _, top_indices = torch.topk(sim, k=k)
+        results = []
+        for idx in top_indices.tolist():
+            if idx < len(self.text_records):
+                results.append(self.text_records[idx])
+        return results
+
+
+

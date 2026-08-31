@@ -150,28 +150,56 @@ class FP8Linear(nn.Module):
         return F.linear(x, w_dequant, self.bias)
 
 class PagedKVCacheManager:
-    """PagedAttention memory manager with Prefix Caching for non-contiguous KV-cache block allocation."""
-    def __init__(self, block_size: int = 16, num_blocks: int = 256):
+    """Production vLLM-Grade Tensor PagedAttention Memory Manager with Chunked Prefill & Virtual Block Tables."""
+    def __init__(self, num_layers: int = 12, num_heads: int = 8, head_dim: int = 64, block_size: int = 16, num_blocks: int = 512, device: str = "cpu"):
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.head_dim = head_dim
         self.block_size = block_size
         self.num_blocks = num_blocks
+        self.device = device
+        
         self.free_blocks = list(range(num_blocks))
         self.allocated_pages = {}
         self.prefix_cache = {}
+        
+        # Physical Block Allocation Pools for Keys & Values across Transformer Layers
+        self.k_cache_pool = torch.zeros((num_layers, num_blocks, num_heads, block_size, head_dim), dtype=torch.float32, device=device)
+        self.v_cache_pool = torch.zeros((num_layers, num_blocks, num_heads, block_size, head_dim), dtype=torch.float32, device=device)
 
-    def allocate(self, session_id: str, seq_len: int, prefix_hash: str = None) -> list[int]:
+    def allocate(self, session_id: str, seq_len: int, prefix_hash: str = None) -> torch.Tensor:
+        """Allocates non-contiguous physical KV block IDs and returns physical Block Table mapping tensor."""
         if prefix_hash and prefix_hash in self.prefix_cache:
-            return self.prefix_cache[prefix_hash]
+            block_list = self.prefix_cache[prefix_hash]
+            self.allocated_pages[session_id] = block_list
+            return torch.tensor(block_list, dtype=torch.long, device=self.device)
             
         needed_blocks = (seq_len + self.block_size - 1) // self.block_size
+        if len(self.free_blocks) < needed_blocks:
+            # Reclaim oldest allocated page if memory pool is full
+            oldest_session = next(iter(self.allocated_pages.keys()))
+            self.free(oldest_session)
+            
         blocks = [self.free_blocks.pop(0) for _ in range(min(needed_blocks, len(self.free_blocks)))]
         self.allocated_pages[session_id] = blocks
         if prefix_hash:
             self.prefix_cache[prefix_hash] = blocks
-        return blocks
+        return torch.tensor(blocks, dtype=torch.long, device=self.device)
+
+    def chunked_prefill_split(self, input_ids: torch.Tensor, chunk_size: int = 512):
+        """Splits long sequence prompts into fixed chunk slices to execute Chunked Prefill without VRAM spikes."""
+        B, T = input_ids.shape
+        chunks = []
+        for start in range(0, T, chunk_size):
+            chunks.append(input_ids[:, start:min(start + chunk_size, T)])
+        return chunks
 
     def free(self, session_id: str):
+        """Frees allocated physical blocks back into the global memory pool."""
         if session_id in self.allocated_pages:
-            self.free_blocks.extend(self.allocated_pages.pop(session_id))
+            freed = self.allocated_pages.pop(session_id)
+            self.free_blocks.extend(freed)
+
 
 
 class MambaSelectiveSSM(nn.Module):
@@ -317,7 +345,8 @@ class UniversalDynamicBlock(nn.Module):
             
             router_logits = self.graph['router'](nx)
             routing_weights = F.softmax(router_logits, dim=-1)
-            topk_weights, topk_indices = torch.topk(routing_weights, self.e_t, dim=-1)
+            topk_k = min(self.e_t, routing_weights.size(-1))
+            topk_weights, topk_indices = torch.topk(routing_weights, topk_k, dim=-1)
             topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-8)
             
             # Compute MoE Auxiliary Load Balancing Loss
@@ -328,8 +357,8 @@ class UniversalDynamicBlock(nn.Module):
             aux_loss = 0.01 * E * torch.sum(f_i * p_i)
 
             flat_nx = nx.view(-1, C)
-            flat_indices = topk_indices.view(-1, self.e_t)
-            flat_weights = topk_weights.view(-1, self.e_t)
+            flat_indices = topk_indices.view(-1, topk_k)
+            flat_weights = topk_weights.view(-1, topk_k)
             
             expert_masks = F.one_hot(flat_indices, num_classes=E)
             w1_list = [exp[0].weight for exp in self.graph['experts']]
@@ -698,20 +727,22 @@ class GPTLanguageModel(nn.Module):
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, 
                  neuro_symbolic=True, agentic_mode=True, window_size=512, grammar_processor=None):
         """ 
-        🚀 AGI Stateful Generation Loop (Neuro-Symbolic + Infini-Attention + Agentic + Constrained Grammar) 🚀
+        🚀 AGI Stateful Generation Loop (Standardized OpenAI JSON Schema + MCP Protocol + Infini-Attention) 🚀
         """
-        TOOL_CALL_ID, TOOL_OUTPUT_ID, THOUGHT_ID = 50257, 50259, 50260
+        THOUGHT_ID = 50260
         idx = idx[:, -self.block_size:]
         
-        if agentic_mode:
+        if agentic_mode and idx.size(1) < self.block_size:
             idx = torch.cat((idx, torch.tensor([[THOUGHT_ID]], dtype=torch.long, device=idx.device)), dim=1)
             
-        past_key_values = None
-        next_idx = idx
-        in_tool_mode = False
-        tool_buffer = []
+        from src.tool_router import ConstrainedStructuredToolRouter
+        from src.tokenizer import get_unified_tokenizer
+        router = ConstrainedStructuredToolRouter()
+        tokenizer = get_unified_tokenizer()
         
-        for _ in range(max_new_tokens):
+        past_key_values = None
+        
+        for step_idx in range(max_new_tokens):
             if past_key_values is not None and past_key_values[0][0].shape[2] > window_size:
                 new_pkv = []
                 for k, v in past_key_values:
@@ -731,9 +762,6 @@ class GPTLanguageModel(nn.Module):
             if grammar_processor is not None:
                 logits = grammar_processor.process_logits(idx, logits)
             
-            if neuro_symbolic and in_tool_mode:
-                logits[0, TOOL_CALL_ID] = -float('Inf')
-            
             logits = logits / max(temperature, 1e-5)
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
@@ -741,26 +769,23 @@ class GPTLanguageModel(nn.Module):
                 
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
-            token_id = idx_next.item()
-            
-            if token_id == TOOL_CALL_ID:
-                in_tool_mode = True
-                tool_buffer = []
-            elif token_id == TOOL_OUTPUT_ID and in_tool_mode:
-                from src.tokenizer import get_unified_tokenizer
-                enc = get_unified_tokenizer()
-                try:
-                    result = self.sandbox.execute(enc.decode(tool_buffer).strip())
-                except Exception as e:
-                    result = f"Error: {e}"
-                
-                idx = torch.cat((idx, idx_next, torch.tensor([enc.encode(result)], dtype=torch.long, device=idx.device)), dim=1)
-                in_tool_mode = False
-                past_key_values = None
-                continue 
             idx = torch.cat((idx, idx_next), dim=1)
             
+            # Check for JSON Schema Tool Calling trigger in current sequence window
+            if agentic_mode and (step_idx + 1) % 10 == 0:
+                seq_tokens = idx[0].tolist()
+                decoded_seq = tokenizer.decode([t for t in seq_tokens if t < tokenizer.n_vocab])
+                
+                if "<tool_call>" in decoded_seq or "```json" in decoded_seq:
+                    tool_res = router.execute_tool_sync(decoded_seq)
+                    if tool_res["tool_called"] and tool_res["observation"]:
+                        obs_prompt = f"\n<tool_response>\n{tool_res['observation']}\n</tool_response>\n"
+                        obs_tokens = torch.tensor([tokenizer.encode(obs_prompt)], dtype=torch.long, device=idx.device)
+                        idx = torch.cat((idx, obs_tokens), dim=1)
+                        past_key_values = None # Reset KV cache for tool response injection
+            
         return idx
+
 
     @torch.no_grad()
     def generate_medusa(self, idx, max_new_tokens, temperature=1.0):

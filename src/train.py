@@ -114,6 +114,68 @@ def train_agi():
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     safetensors.torch.save_file(model.state_dict(), save_path)
 
+def train_grpo_alignment(steps: int = 10):
+    """Executes DeepSeek-R1 style Group Relative Policy Optimization (GRPO) alignment training loop."""
+    from src.grpo import GRPOTrainer
+    engine = AGIInferenceEngine()
+    model = engine.model
+    trainer = GRPOTrainer(model=model, group_size=4, lr=1e-5)
+    
+    tokenizer = engine.enc
+    sample_prompts = [
+        "Solve the equation: 2*x + 5 = 15. Show your reasoning inside <think> tags.",
+        "Write a Python function to compute Fibonacci sequence with dynamic programming.",
+        "Explain Mixture-of-Experts (MoE) routing with mathematical formulation."
+    ]
+    
+    print("🚀 Starting GRPO Self-Play RL Alignment Training Loop...")
+    for step in range(steps):
+        prompt_str = sample_prompts[step % len(sample_prompts)]
+        prompt_tokens = torch.tensor([tokenizer.encode(prompt_str)], dtype=torch.long, device=trainer.device)
+        metrics = trainer.train_step(prompt_tokens, max_gen_tokens=64)
+        print(f"Step {step+1}/{steps} | GRPO Loss: {metrics['grpo_loss']:.4f} | Reward: {metrics['mean_reward']:.4f} | KL: {metrics['kl_divergence']:.4f}")
+        
+    save_path = "models/smollm_agi_grpo_aligned.safetensors"
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    safetensors.torch.save_file(model.state_dict(), save_path)
+    print(f"✅ GRPO Aligned Model Weights successfully saved to {save_path}")
+
+def train_dpo_alignment(steps: int = 10):
+    """Executes Direct Preference Optimization (DPO) preference alignment training loop."""
+    from src.dpo import DPOTrainer, RLAIFEngine
+    engine = AGIInferenceEngine()
+    model = engine.model
+    trainer = DPOTrainer(model=model, beta=0.1, lr=5e-6)
+    rlaif = RLAIFEngine(model=model)
+    tokenizer = engine.enc
+    
+    sample_prompts = [
+        "Write a Python function to check for prime numbers.",
+        "Explain Multi-Head Latent Attention (MLA) low-rank compression."
+    ]
+    
+    print("🚀 Starting Direct Preference Optimization (DPO) Alignment Loop...")
+    for step in range(steps):
+        prompt_str = sample_prompts[step % len(sample_prompts)]
+        prompt_tokens = torch.tensor([tokenizer.encode(prompt_str)], dtype=torch.long, device=trainer.device)
+        chosen, rejected, chosen_m, rejected_m = rlaif.generate_preference_pair(prompt_tokens)
+        metrics = trainer.train_step(chosen, rejected, chosen_m, rejected_m)
+        print(f"Step {step+1}/{steps} | DPO Loss: {metrics['dpo_loss']:.4f} | Margin: {metrics['reward_margin']:.4f}")
+        
+    save_path = "models/smollm_agi_dpo_aligned.safetensors"
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    safetensors.torch.save_file(model.state_dict(), save_path)
+    print(f"✅ DPO Aligned Model Weights successfully saved to {save_path}")
+
+def train_rlaif_alignment(steps: int = 10):
+    """Executes Reinforcement Learning from AI Feedback (RLAIF) autonomous self-improvement alignment loop."""
+    print("🚀 Initiating RLAIF Autonomous AI-Feedback Self-Improvement Loop...")
+    train_grpo_alignment(steps=steps // 2)
+    train_dpo_alignment(steps=steps // 2)
+    print("✅ RLAIF Multi-Stage Preference Alignment Successfully Completed!")
+
+
+
 def generate_deepspeed_config(stage: int = 3, batch_size: int = 2) -> dict:
     """Generates DeepSpeed Stage 3 3D Parallelism configuration for multi-node cluster scaling."""
     return {

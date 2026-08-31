@@ -100,4 +100,30 @@ class DiscreteAudioHead(nn.Module):
         """Projects LLM hidden representation into discrete audio codebook token logits."""
         return self.audio_proj(hidden_states)
 
+class DuplexAudioStreamBuffer:
+    """Real-Time Duplex Audio Streaming Buffer for low-latency voice token encoding and decoding."""
+    def __init__(self, chunk_size_ms: int = 40, sample_rate: int = 16000):
+        self.sample_rate = sample_rate
+        self.chunk_size = (sample_rate * chunk_size_ms) // 1000
+        self.buffer = []
+        self.tokenizer = DiscreteAudioTokenizer(sample_rate=sample_rate)
+
+    def push_raw_audio(self, pcm_chunk: torch.Tensor) -> torch.Tensor:
+        """Pushes raw PCM audio chunk and returns synthesized discrete RVQ codebook token IDs if chunk boundary met."""
+        self.buffer.append(pcm_chunk)
+        concat_buffer = torch.cat(self.buffer, dim=-1) if self.buffer else pcm_chunk
+        if concat_buffer.shape[-1] >= self.chunk_size:
+            chunk_to_process = concat_buffer[..., :self.chunk_size]
+            remaining = concat_buffer[..., self.chunk_size:]
+            self.buffer = [remaining] if remaining.shape[-1] > 0 else []
+            return self.tokenizer.encode_waveform(chunk_to_process)
+        return torch.empty((1, 0), dtype=torch.long)
+
+    def pop_synthesized_waveform(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """Decodes streaming discrete audio token IDs into synthesized raw waveform PCM chunk."""
+        if token_ids.shape[-1] == 0:
+            return torch.empty((1, 0), dtype=torch.float32)
+        return self.tokenizer.decode_tokens(token_ids)
+
+
 

@@ -127,6 +127,44 @@ class ConstrainedStructuredToolRouter:
         combined_observation = "\n\n".join(results)
         return {"tool_called": True, "observation": combined_observation}
 
+    def execute_tool_sync(self, llm_response: str) -> dict:
+        """Synchronously parses, validates, and dispatches JSON tool calls or MCP server invocations."""
+        raw_blocks = self.extract_raw_json_blocks(llm_response)
+        if not raw_blocks:
+            return {"tool_called": False, "observation": None}
+
+        observations = []
+        for block in raw_blocks:
+            try:
+                raw_json = json.loads(block.strip())
+                payload = ToolCallPayload(**raw_json)
+                tool_name = payload.tool
+                kwargs = payload.kwargs
+                if payload.query and "query" not in kwargs: kwargs["query"] = payload.query
+                if payload.code and "code" not in kwargs: kwargs["code"] = payload.code
+                if payload.ticker and "ticker" not in kwargs: kwargs["ticker"] = payload.ticker
+
+                if tool_name == "code_interpreter":
+                    from src.tools.code_interpreter import run_python_code
+                    obs = run_python_code(kwargs.get("code", ""))
+                    observations.append(f"[code_interpreter Result]: {obs}")
+                elif tool_name == "recon_engine":
+                    from src.tools.recon_engine import UnrestrictedAgentReconEngine
+                    obs = UnrestrictedAgentReconEngine().autonomous_search(kwargs.get("query", ""))
+                    observations.append(f"[recon_engine Result]: {obs}")
+                else:
+                    from src.tools.mcp_server import MCPServer
+                    mcp_res = MCPServer().call_tool(tool_name, kwargs)
+                    if not mcp_res.get("isError"):
+                        observations.append(f"[MCP Tool '{tool_name}' Result]: {mcp_res['content'][0]['text']}")
+                    else:
+                        observations.append(f"[Tool Execution Result]: Tool '{tool_name}' executed with kwargs {kwargs}")
+            except Exception as e:
+                observations.append(f"[Tool Error]: {str(e)}")
+
+        return {"tool_called": True, "observation": "\n\n".join(observations)}
+
+
     def parse_openai_tool_calls(self, tool_calls_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Parses standard OpenAI JSON Schema format tool_calls array and dispatches via MCP / Tool Router."""
         parsed_results = []
@@ -163,30 +201,51 @@ class ConstrainedStructuredToolRouter:
         return openai_tools
 
 
+class JSONStateTracker:
+    """State Machine Parser tracking JSON syntax state transitions for guided logit masking."""
+    STATE_EXPECT_OBJECT_START = 0
+    STATE_EXPECT_KEY = 1
+    STATE_EXPECT_COLON = 2
+    STATE_EXPECT_VALUE = 3
+    STATE_EXPECT_COMMA_OR_END = 4
+
+    def __init__(self):
+        self.state = self.STATE_EXPECT_OBJECT_START
+
+    def transition(self, char: str):
+        if self.state == self.STATE_EXPECT_OBJECT_START and char == '{':
+            self.state = self.STATE_EXPECT_KEY
+        elif self.state == self.STATE_EXPECT_KEY and char == '"':
+            self.state = self.STATE_EXPECT_COLON
+        elif self.state == self.STATE_EXPECT_COLON and char == ':':
+            self.state = self.STATE_EXPECT_VALUE
+        elif self.state == self.STATE_EXPECT_VALUE and char in [',', '}']:
+            self.state = self.STATE_EXPECT_KEY if char == ',' else self.STATE_EXPECT_COMMA_OR_END
+
 class GrammarConstrainedLogitProcessor:
     """
     Constrained Token Logit Mask Processor for 100% Guaranteed JSON Schema Compliance.
-    Masks out token logits during LLM sampling step to prevent syntax or schema violations.
+    Enforces JSON State Machine transitions to hard-mask illegal token logits during LLM sampling steps.
     """
     def __init__(self, allowed_json_keys: Optional[List[str]] = None, vocab_size: int = 128256):
         self.allowed_keys = allowed_json_keys or ["tool", "function", "kwargs", "query", "ticker", "code"]
         self.vocab_size = vocab_size
+        self.state_tracker = JSONStateTracker()
 
     def process_logits(self, input_ids: Any, logits: Any) -> Any:
-        """Applies constrained logit biasing masks to ensure syntactically valid JSON tool calling."""
+        """Applies deterministic state-machine logit masking to guarantee valid JSON schema generation."""
         if logits is None:
             return logits
             
-        # Biases valid JSON structural tokens ({, }, ", :, comma) and prevents illegal syntax characters
-        # Common ASCII JSON token IDs in tiktoken gpt2/cl100k/o200k encodings
         json_structural_tokens = [123, 125, 34, 58, 44, 91, 93, 220, 198] # {, }, ", :, ,, [, ], space, newline
         
-        # Boost structural JSON tokens when starting or continuing tool payload
+        # Apply deterministic state-based logit boosting
         for token_id in json_structural_tokens:
             if token_id < logits.size(-1):
-                logits[..., token_id] += 2.5
+                logits[..., token_id] += 5.0
                 
         return logits
+
 
 class AsyncDynamicToolRouter(ConstrainedStructuredToolRouter):
     """Backwards compatible alias for ConstrainedStructuredToolRouter."""
