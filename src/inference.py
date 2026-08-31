@@ -102,7 +102,9 @@ class AGIInferenceEngine:
             tokens = self.enc.encode(prompt)
         if len(tokens) > self.config.block_size - max_new_tokens:
             tokens = tokens[-(self.config.block_size - max_new_tokens):]
+        max_vocab_id = self.model.graph['tok_emb'].weight.size(0) - 1
         idx = torch.tensor([tokens], dtype=torch.long).to(self.device)
+        idx = torch.clamp(idx, min=0, max=max_vocab_id)
         self.model.eval()
         
         past_key_values = None
@@ -123,6 +125,7 @@ class AGIInferenceEngine:
                 
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 idx_next = torch.multinomial(probs, num_samples=1)
+                idx_next = torch.clamp(idx_next, min=0, max=max_vocab_id)
                 
                 idx = torch.cat((idx, idx_next), dim=1)
                 generated_ids.append(idx_next.item())
@@ -152,7 +155,9 @@ class AGIInferenceEngine:
         if len(tokens) > self.config.block_size - max_new_tokens:
             tokens = tokens[-(self.config.block_size - max_new_tokens):]
             
+        max_vocab_id = self.model.graph['tok_emb'].weight.size(0) - 1
         idx = torch.tensor([tokens], dtype=torch.long).to(self.device)
+        idx = torch.clamp(idx, min=0, max=max_vocab_id)
         self.model.eval()
         
         past_key_values = None
@@ -168,6 +173,7 @@ class AGIInferenceEngine:
                 
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 idx_next = torch.multinomial(probs, num_samples=1)
+                idx_next = torch.clamp(idx_next, min=0, max=max_vocab_id)
                 
                 idx = torch.cat((idx, idx_next), dim=1)
                 token_id = idx_next.item()

@@ -8,7 +8,7 @@ def evaluate_humaneval_sample(code_str: str) -> float:
     sandbox = SecureSandbox(use_docker=False)
     try:
         res = sandbox.execute(code_str)
-        if "SyntaxError" in res or "Traceback" in res or "NameError" in res or "TypeError" in res:
+        if any(err in res for err in ["SyntaxError", "Traceback", "NameError", "TypeError", "Error", "blocked", "Unsafe", "invalid", "AST FILTER"]):
             return 0.0
         return 1.0
     except Exception:
