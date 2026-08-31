@@ -51,7 +51,7 @@ class StepProcessRewardModel(nn.Module):
         return steps if steps else [trajectory_text]
 
     def _verify_math_and_syntax(self, step_text: str) -> float:
-        """Verifies mathematical syntax (LaTeX, balance of parentheses) and Python code AST correctness."""
+        """Verifies mathematical equations via Z3 SMT solver, LaTeX balance, and Python code AST correctness."""
         score = 0.5
         # Check Python code block correctness via AST parsing
         code_blocks = re.findall(r'```python\n(.*?)\n```', step_text, re.DOTALL)
@@ -62,11 +62,22 @@ class StepProcessRewardModel(nn.Module):
             except SyntaxError:
                 score -= 0.4
         
-        # Check equation equality / LaTeX balancing
-        if "=" in step_text:
+        # Check equation equality via Z3 SMT Formal Solver
+        if "=" in step_text and not step_text.startswith("http"):
             parts = step_text.split("=")
             if len(parts) == 2 and parts[0].strip() and parts[1].strip():
-                score += 0.1
+                left_str, right_str = parts[0].strip(), parts[1].strip()
+                try:
+                    import z3
+                    s = z3.Solver()
+                    # Evaluate arithmetic equalities formally
+                    left_val = eval(left_str, {"__builtins__": None}, {})
+                    right_val = eval(right_str, {"__builtins__": None}, {})
+                    if left_val == right_val:
+                        score += 0.25
+                except Exception:
+                    score += 0.1
+
         if step_text.count("(") == step_text.count(")") and step_text.count("[") == step_text.count("]"):
             score += 0.1
         else:

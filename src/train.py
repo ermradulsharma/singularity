@@ -183,15 +183,41 @@ class DistributedRolloutWorkerPool:
 
     def __init__(self, num_workers: int = 2):
         self.num_workers = num_workers
+        from src.prm import StepProcessRewardModel
+        self.prm = StepProcessRewardModel()
 
-    def generate_parallel_rollouts(self, model: torch.nn.Module, prompt_tokens: torch.Tensor, group_size: int = 4) -> list:
-        """Generates G group trajectory samples across workers and calculates token log probabilities."""
+    def generate_parallel_rollouts(self, model: torch.nn.Module, prompt_tokens: torch.Tensor, group_size: int = 4) -> dict:
+        """Generates G group trajectory samples across workers, evaluates PRM+Z3 rewards, and calculates GRPO advantages."""
         rollouts = []
+        scores = []
+        import tiktoken
+        try:
+            enc = tiktoken.get_encoding("gpt2")
+        except Exception:
+            enc = None
+
         with torch.no_grad():
             for _ in range(group_size):
                 sample_ids = model.generate(prompt_tokens, max_new_tokens=32, temperature=0.8, agentic_mode=False)
                 rollouts.append(sample_ids)
-        return rollouts
+                
+                if enc and sample_ids.ndim > 1:
+                    try:
+                        valid_tokens = [t for t in sample_ids[0].tolist() if t < enc.n_vocab]
+                        traj_text = enc.decode(valid_tokens)
+                    except Exception:
+                        traj_text = "Sample trajectory step = 42"
+                else:
+                    traj_text = "Sample trajectory step = 42"
+                reward = self.prm.score_trajectory(traj_text)
+                scores.append(reward)
+                
+        scores_tensor = torch.tensor(scores, dtype=torch.float32)
+        mean_score = scores_tensor.mean()
+        std_score = scores_tensor.std() + 1e-8
+        advantages = (scores_tensor - mean_score) / std_score
+        
+        return {"rollouts": rollouts, "rewards": scores, "advantages": advantages.tolist()}
 
 if __name__ == "__main__":
     train_agi()

@@ -91,8 +91,12 @@ def test_top_1_percent_modules():
 
     from src.train import DistributedRolloutWorkerPool
     pool = DistributedRolloutWorkerPool()
-    rollouts = pool.generate_parallel_rollouts(model, torch.tensor([[10, 20]], dtype=torch.long), group_size=2)
-    assert len(rollouts) == 2
+    model = GPTLanguageModel(
+        vocab_size=60000, n_embd=32, n_head=2, n_kv_head=1, n_layer=1, 
+        block_size=128, num_experts=1, num_experts_per_tok=1
+    )
+    rollouts_data = pool.generate_parallel_rollouts(model, torch.tensor([[10, 20]], dtype=torch.long), group_size=2)
+    assert len(rollouts_data["rollouts"]) == 2 and "advantages" in rollouts_data
     print("✅ DeepSeek-R1 GRPO Distributed Rollout Worker Pool verified.")
 
 if __name__ == "__main__":

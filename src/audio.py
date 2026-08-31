@@ -42,3 +42,14 @@ class InterleavedSpeechProjector(nn.Module):
     def forward(self, speech_embeds: torch.Tensor) -> torch.Tensor:
         return self.speech_proj(speech_embeds)
 
+class DiscreteAudioHead(nn.Module):
+    """Direct Acoustic Codebook Output Generation Head for Zero-Latency Speech Synthesis."""
+    def __init__(self, d_model: int = 128, num_audio_tokens: int = 1024):
+        super().__init__()
+        self.audio_proj = nn.Linear(d_model, num_audio_tokens, bias=False)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Projects LLM hidden representation into discrete audio codebook token logits."""
+        return self.audio_proj(hidden_states)
+
+

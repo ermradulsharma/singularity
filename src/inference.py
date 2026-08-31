@@ -37,6 +37,18 @@ class ModelArgs:
             except Exception as e:
                 print(f"[WARNING] Failed to load models/config.json: {e}")
 
+    @classmethod
+    def get_preset_config(cls, scale: str = "micro"):
+        """Returns preset configuration for micro, 1b, 7b, or 70b production scale models."""
+        args = cls()
+        if scale == "1b":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer = 2048, 16, 4, 16
+        elif scale == "7b":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer = 4096, 32, 8, 32
+        elif scale == "70b":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts = 8192, 64, 8, 80, 8
+        return args
+
 def remap_state_dict(raw_state_dict: dict) -> dict:
     """Remaps standard HuggingFace / Llama checkpoint keys to internal GPTLanguageModel topology."""
     remapped = {}

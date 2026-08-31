@@ -136,17 +136,23 @@ class FP8Linear(nn.Module):
         return F.linear(x, w_dequant, self.bias)
 
 class PagedKVCacheManager:
-    """PagedAttention memory manager for non-contiguous KV-cache block allocation during 32k context streaming."""
+    """PagedAttention memory manager with Prefix Caching for non-contiguous KV-cache block allocation."""
     def __init__(self, block_size: int = 16, num_blocks: int = 256):
         self.block_size = block_size
         self.num_blocks = num_blocks
         self.free_blocks = list(range(num_blocks))
         self.allocated_pages = {}
+        self.prefix_cache = {}
 
-    def allocate(self, session_id: str, seq_len: int) -> list[int]:
+    def allocate(self, session_id: str, seq_len: int, prefix_hash: str = None) -> list[int]:
+        if prefix_hash and prefix_hash in self.prefix_cache:
+            return self.prefix_cache[prefix_hash]
+            
         needed_blocks = (seq_len + self.block_size - 1) // self.block_size
         blocks = [self.free_blocks.pop(0) for _ in range(min(needed_blocks, len(self.free_blocks)))]
         self.allocated_pages[session_id] = blocks
+        if prefix_hash:
+            self.prefix_cache[prefix_hash] = blocks
         return blocks
 
     def free(self, session_id: str):
@@ -317,11 +323,12 @@ class GPTLanguageModel(nn.Module):
         self.block_size = block_size
         self.vocab_size = vocab_size
         
-        from src.audio import InterleavedSpeechProjector
+        from src.audio import InterleavedSpeechProjector, DiscreteAudioHead
         self.graph = nn.ModuleDict({
             'tok_emb': nn.Embedding(vocab_size, n_embd),
             'vision': VisionEncoder(dim=n_embd),
             'speech_proj': InterleavedSpeechProjector(d_model=n_embd, audio_dim=64),
+            'audio_head': DiscreteAudioHead(d_model=n_embd, num_audio_tokens=1024),
             'blocks': nn.ModuleList([UniversalDynamicBlock(n_embd, n_head, n_kv_head, num_experts, num_experts_per_tok) for _ in range(n_layer)]),
             'ln_f': nn.LayerNorm(n_embd),
             'lm_head': nn.Linear(n_embd, vocab_size, bias=False),
@@ -430,9 +437,9 @@ class GPTLanguageModel(nn.Module):
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, 
-                 neuro_symbolic=True, agentic_mode=True, window_size=512):
+                 neuro_symbolic=True, agentic_mode=True, window_size=512, grammar_processor=None):
         """ 
-        🚀 AGI Stateful Generation Loop (Neuro-Symbolic + Infini-Attention + Agentic) 🚀
+        🚀 AGI Stateful Generation Loop (Neuro-Symbolic + Infini-Attention + Agentic + Constrained Grammar) 🚀
         """
         TOOL_CALL_ID, TOOL_OUTPUT_ID, THOUGHT_ID = 50257, 50259, 50260
         idx = idx[:, -self.block_size:]
@@ -461,6 +468,9 @@ class GPTLanguageModel(nn.Module):
             next_idx = idx[:, -1:] if past_key_values is not None else idx
             logits, _, past_key_values = self(next_idx, use_cache=True, past_key_values=past_key_values)
             logits = logits[:, -1, :]
+            
+            if grammar_processor is not None:
+                logits = grammar_processor.process_logits(idx, logits)
             
             if neuro_symbolic and in_tool_mode:
                 logits[0, TOOL_CALL_ID] = -float('Inf')
