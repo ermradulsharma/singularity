@@ -200,7 +200,7 @@ class DistributedRolloutWorkerPool:
         
         return {"rollouts": rollouts, "rewards": scores, "advantages": advantages.tolist()}
 
-def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.04):
+def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.04, clip_eps: float = 0.2):
     """
     🚀 DeepSeek-R1 Style Group Relative Policy Optimization (GRPO) Reinforcement Learning Loop 🚀
     Samples G completion trajectories per prompt, evaluates multi-objective rewards (PRM + Format + Sandbox),
@@ -236,27 +236,38 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
             
         group_trajectories = []
         group_ids = []
+        old_log_probs_list = []
         
-        # Sample G group completions
+        # 1. Sample G group completions & record old log probabilities
         with torch.no_grad():
             for g in range(group_size):
-                sample_ids = model.generate(prompt_tokens, max_new_tokens=32, temperature=0.7, agentic_mode=False)
+                sample_ids = model.generate(prompt_tokens, max_new_tokens=32, temperature=0.8, agentic_mode=False)
                 group_ids.append(sample_ids)
+                
+                inputs = sample_ids[:, :-1]
+                targets = sample_ids[:, 1:]
+                logits, _ = model(inputs)
+                log_probs = torch.log_softmax(logits, dim=-1)
+                selected_log_probs = torch.gather(log_probs, 2, targets.unsqueeze(-1)).squeeze(-1).sum(dim=-1)
+                old_log_probs_list.append(selected_log_probs)
+                
                 if hasattr(tokenizer, 'decode'):
                     try:
                         valid_ids = [t for t in sample_ids[0].tolist() if t < getattr(tokenizer, 'n_vocab', 128256)]
                         text = tokenizer.decode(valid_ids)
                     except Exception:
-                        text = f"<think>Reasoning trajectory sample {g}</think>\nAnswer: 42"
+                        text = f"<think>Reasoning trajectory step {g}</think>\nAnswer: 42"
                 else:
-                    text = f"<think>Reasoning trajectory sample {g}</think>\nAnswer: 42"
+                    text = f"<think>Reasoning trajectory step {g}</think>\nAnswer: 42"
                 group_trajectories.append(text)
                 
+        # 2. Evaluate Multi-Objective Group Rewards (PRM + Format + Sandbox)
         rewards = reward_evaluator.evaluate_group(group_trajectories)
         mean_r = rewards.mean()
         std_r = rewards.std() + 1e-8
         advantages = (rewards - mean_r) / std_r
         
+        # 3. Policy Network Clipped Ratio Advantage Backpropagation
         optimizer.zero_grad()
         total_policy_loss = torch.tensor(0.0, device=engine.device, requires_grad=True)
         
@@ -266,10 +277,18 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
             targets = traj_tensor[:, 1:]
             logits, loss = model(inputs, targets=targets)
             
-            # GRPO Advantage Weighted Loss
-            if loss is not None:
-                policy_loss = -advantages[g].item() * loss
-                total_policy_loss = total_policy_loss + policy_loss
+            new_log_probs = torch.log_softmax(logits, dim=-1)
+            new_selected_log_probs = torch.gather(new_log_probs, 2, targets.unsqueeze(-1)).squeeze(-1).sum(dim=-1)
+            
+            # Probability Ratio r_i(\theta) = exp(log_p_new - log_p_old)
+            ratio = torch.exp(new_selected_log_probs - old_log_probs_list[g].detach())
+            adv_g = advantages[g].item()
+            
+            surr1 = ratio * adv_g
+            surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv_g
+            grpo_loss = -torch.min(surr1, surr2).mean()
+            
+            total_policy_loss = total_policy_loss + grpo_loss
             
         avg_loss = total_policy_loss / group_size
         if avg_loss.requires_grad:
@@ -278,6 +297,11 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
             optimizer.step()
         
         print(f"[GRPO RL Step {step+1}/{num_steps}] Mean Reward: {mean_r.item():.4f} | Loss: {avg_loss.item():.4f}")
+        
+    save_path = "models/singularity_grpo_evolved.safetensors"
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    safetensors.torch.save_file(model.state_dict(), save_path)
+    print(f"[GRPO RL Engine] Checkpoint saved successfully -> {save_path}")
 
 if __name__ == "__main__":
     train_agi()

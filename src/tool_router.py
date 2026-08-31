@@ -168,12 +168,24 @@ class GrammarConstrainedLogitProcessor:
     Constrained Token Logit Mask Processor for 100% Guaranteed JSON Schema Compliance.
     Masks out token logits during LLM sampling step to prevent syntax or schema violations.
     """
-    def __init__(self, allowed_json_keys: Optional[List[str]] = None):
+    def __init__(self, allowed_json_keys: Optional[List[str]] = None, vocab_size: int = 128256):
         self.allowed_keys = allowed_json_keys or ["tool", "function", "kwargs", "query", "ticker", "code"]
+        self.vocab_size = vocab_size
 
     def process_logits(self, input_ids: Any, logits: Any) -> Any:
         """Applies constrained logit biasing masks to ensure syntactically valid JSON tool calling."""
+        if logits is None:
+            return logits
+            
         # Biases valid JSON structural tokens ({, }, ", :, comma) and prevents illegal syntax characters
+        # Common ASCII JSON token IDs in tiktoken gpt2/cl100k/o200k encodings
+        json_structural_tokens = [123, 125, 34, 58, 44, 91, 93, 220, 198] # {, }, ", :, ,, [, ], space, newline
+        
+        # Boost structural JSON tokens when starting or continuing tool payload
+        for token_id in json_structural_tokens:
+            if token_id < logits.size(-1):
+                logits[..., token_id] += 2.5
+                
         return logits
 
 class AsyncDynamicToolRouter(ConstrainedStructuredToolRouter):

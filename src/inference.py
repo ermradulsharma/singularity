@@ -9,17 +9,23 @@ import safetensors.torch
 
 class ModelArgs:
     vocab_size = 128256
-    n_embd = 128
-    n_head = 4
-    n_kv_head = 2
-    n_layer = 2
-    block_size = 4096
-    num_experts = 2
-    num_experts_per_tok = 1
+    n_embd = 16384          # 1 Trillion+ Parameter Frontier Embedding Dimension
+    n_head = 128            # 128 Attention Heads
+    n_kv_head = 16          # 16 Key/Value Heads (Grouped-Query Attention)
+    n_layer = 128           # 128 Deep Transformer Layers
+    block_size = 1048576    # 1 Million Token (1M) Infinite Context Window
+    num_experts = 512       # 512 Fine-Grained MoE Experts (DeepSeek V3 / Singularity-1T)
+    num_experts_per_tok = 8 # Top-8 Active Expert Routing per Token
     dropout = 0.0
-    intermediate_size = None
+    intermediate_size = 57344 # SwiGLU 3.5x Ratio
 
-    def __init__(self):
+    def __init__(self, scale: str = None):
+        if scale:
+            preset = self.get_preset_config(scale)
+            for k, v in preset.__dict__.items():
+                setattr(self, k, v)
+            return
+
         if os.path.exists("models/config.json"):
             try:
                 with open("models/config.json", "r") as f:
@@ -30,24 +36,44 @@ class ModelArgs:
                 self.n_kv_head = config.get("n_kv_head", self.n_kv_head)
                 self.n_layer = config.get("n_layer", self.n_layer)
                 self.block_size = config.get("block_size", self.block_size)
-                self.intermediate_size = config.get("intermediate_size", None)
+                self.intermediate_size = config.get("intermediate_size", self.intermediate_size)
                 self.num_experts = config.get("num_experts", self.num_experts)
                 self.num_experts_per_tok = config.get("num_experts_per_tok", self.num_experts_per_tok)
             except Exception:
                 pass
+        elif os.path.exists("config/config.yaml"):
+            try:
+                import yaml
+                with open("config/config.yaml", "r") as f:
+                    cfg = yaml.safe_load(f)
+                if cfg and "model" in cfg:
+                    m = cfg["model"]
+                    self.n_embd = m.get("n_embd", self.n_embd)
+                    self.n_head = m.get("n_head", self.n_head)
+                    self.n_kv_head = m.get("n_kv_head", self.n_kv_head)
+                    self.n_layer = m.get("n_layer", self.n_layer)
+                    self.block_size = m.get("block_size", self.block_size)
+                    self.num_experts = m.get("num_experts", self.num_experts)
+                    self.num_experts_per_tok = m.get("num_experts_per_tok", self.num_experts_per_tok)
+            except Exception:
+                pass
 
     @classmethod
-    def get_preset_config(cls, scale: str = "micro"):
-        """Returns preset configuration for micro, 1b, 7b, 70b, or 671b production scale models."""
+    def get_preset_config(cls, scale: str = "1t"):
+        """Returns preset configuration for micro, 1b, 8b, 70b, 671b, or 1t (Singularity Frontier 1 Trillion+) scale models."""
         args = cls()
-        if scale == "1b":
-            args.n_embd, args.n_head, args.n_kv_head, args.n_layer = 2048, 16, 4, 16
-        elif scale == "7b":
-            args.n_embd, args.n_head, args.n_kv_head, args.n_layer = 4096, 32, 8, 32
+        if scale == "micro":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.block_size, args.num_experts = 128, 4, 2, 4, 1024, 2
+        elif scale == "1b":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.block_size, args.num_experts = 2048, 16, 4, 16, 4096, 4
+        elif scale == "8b":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.block_size, args.num_experts = 4096, 32, 8, 32, 8192, 8
         elif scale == "70b":
-            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts = 8192, 64, 8, 80, 8
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts, args.block_size = 8192, 64, 8, 80, 8, 16384
         elif scale == "671b":
-            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts, args.num_experts_per_tok = 8192, 64, 8, 61, 256, 8
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts, args.num_experts_per_tok, args.block_size = 8192, 64, 8, 61, 256, 8, 131072
+        elif scale in ("1t", "frontier"):
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts, args.num_experts_per_tok, args.block_size = 16384, 128, 16, 128, 512, 8, 1048576
         return args
 
 def remap_state_dict(raw_state_dict: dict) -> dict:
@@ -83,9 +109,19 @@ def remap_state_dict(raw_state_dict: dict) -> dict:
     return remapped
 
 class AGIInferenceEngine:
-    def __init__(self, enable_fp8: bool = False, enable_compile: bool = False):
+    def __init__(self, enable_fp8: bool = False, enable_compile: bool = False, scale: str = None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.config = ModelArgs()
+        
+        possible_brains = ["models/singularity_1t_frontier.safetensors", "models/smollm_agi.safetensors", "models/tinyllama_agi.safetensors", "models/uncensored_agi.safetensors", "models/llama3_agi.safetensors", "models/deepseek_agi.safetensors"]
+        has_weights = any(os.path.exists(bp) for bp in possible_brains)
+        
+        if scale:
+            self.config = ModelArgs(scale=scale)
+        elif self.device == "cpu" and not has_weights:
+            self.config = ModelArgs.get_preset_config("micro")
+        else:
+            self.config = ModelArgs()
+
         self.model = GPTLanguageModel(
             self.config.vocab_size, self.config.n_embd, self.config.n_head, 
             self.config.n_kv_head, self.config.n_layer, self.config.block_size, 
@@ -109,7 +145,16 @@ class AGIInferenceEngine:
             except Exception:
                 pass
 
-        possible_brains = ["models/smollm_agi.safetensors", "models/tinyllama_agi.safetensors", "models/uncensored_agi.safetensors", "models/llama3_agi.safetensors", "models/deepseek_agi.safetensors"]
+        possible_brains = [
+            "models/singularity_grpo_evolved.safetensors", 
+            "models/singularity_1t_frontier.safetensors", 
+            "models/smollm_agi_evolved.safetensors",
+            "models/smollm_agi.safetensors", 
+            "models/tinyllama_agi.safetensors", 
+            "models/uncensored_agi.safetensors", 
+            "models/llama3_agi.safetensors", 
+            "models/deepseek_agi.safetensors"
+        ]
         weights_loaded = False
         loaded_brain = None
         
