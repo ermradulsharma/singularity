@@ -102,7 +102,7 @@ class StepProcessRewardModel(nn.Module):
                 continue
             
             # Heuristic & Formal Verification component
-            h_score = 0.5
+            h_score = 0.55
             if "Error" in step_clean or "Exception" in step_clean or "Traceback" in step_clean:
                 h_score -= 0.4
             if "Thought:" in step_clean or "Observation:" in step_clean or "Code:" in step_clean or "<think>" in step_clean:
