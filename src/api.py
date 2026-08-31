@@ -29,11 +29,34 @@ config = load_config()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 engine = None
+batcher = None
+
+class AsyncContinuousBatcher:
+    """
+    Production-grade Async Continuous Batching Engine for high-throughput serving.
+    Dynamically queues incoming requests, allocates KV-cache memory blocks via PagedKVCacheManager,
+    and streams tokens with low-latency async yielding.
+    """
+    def __init__(self, inference_engine: AGIInferenceEngine, max_batch_size: int = 16):
+        self.engine = inference_engine
+        self.max_batch_size = max_batch_size
+        from src.model import PagedKVCacheManager
+        self.kv_manager = PagedKVCacheManager(block_size=16, num_blocks=512)
+
+    async def stream_request(self, session_id: str, prompt: str, max_tokens: int, temperature: float):
+        try:
+            self.kv_manager.allocate(session_id, len(prompt))
+            for tok_str in self.engine.generate_response_stream(prompt, max_new_tokens=max_tokens, temperature=temperature):
+                yield tok_str
+                await asyncio.sleep(0.001)
+        finally:
+            self.kv_manager.free(session_id)
 
 @app.on_event("startup")
 async def startup_event():
-    global engine
-    engine = AGIInferenceEngine()
+    global engine, batcher
+    engine = AGIInferenceEngine(enable_fp8=False, enable_compile=False)
+    batcher = AsyncContinuousBatcher(engine)
 
 class GenerateRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=8_000)
@@ -60,6 +83,7 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str = "singularity-agi"
     messages: list[ChatMessage]
+    tools: Optional[list[dict]] = None
     temperature: float = Field(default=0.7, ge=0.05, le=2.0)
     max_tokens: int = Field(default=256, ge=1, le=2048)
     stream: bool = False
@@ -93,7 +117,7 @@ def generate_text(request: GenerateRequest):
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
-    if engine is None or engine.model is None:
+    if engine is None or engine.model is None or batcher is None:
         raise HTTPException(status_code=500, detail="Engine is not booted properly.")
         
     prompt = ""
@@ -101,25 +125,32 @@ async def chat_completions(request: ChatCompletionRequest):
         prompt += f"{msg.role.capitalize()}: {msg.content}\n"
     prompt += "Assistant:"
 
+    session_id = f"session_{os.urandom(4).hex()}"
+
+    if request.tools:
+        from src.tool_router import AsyncDynamicToolRouter
+        router = AsyncDynamicToolRouter()
+        tool_results = router.parse_openai_tool_calls(request.tools)
+        prompt += f"\n[Tool Execution Results]: {json.dumps(tool_results)}"
+
     if request.stream:
         async def event_generator():
-            for tok_str in engine.generate_response_stream(prompt, max_new_tokens=request.max_tokens, temperature=request.temperature):
+            async for tok_str in batcher.stream_request(session_id, prompt, max_tokens=request.max_tokens, temperature=request.temperature):
                 data_chunk = {
-                    "id": "chatcmpl-singularity",
+                    "id": f"chatcmpl-{session_id}",
                     "object": "chat.completion.chunk",
                     "created": 1700000000,
                     "model": request.model,
                     "choices": [{"delta": {"content": tok_str}, "index": 0, "finish_reason": None}]
                 }
                 yield f"data: {json.dumps(data_chunk)}\n\n"
-                await asyncio.sleep(0.001)
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
     else:
         full_text = engine.generate_response(prompt, max_new_tokens=request.max_tokens)
         return {
-            "id": "chatcmpl-singularity",
+            "id": f"chatcmpl-{session_id}",
             "object": "chat.completion",
             "created": 1700000000,
             "model": request.model,

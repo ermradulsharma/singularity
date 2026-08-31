@@ -163,11 +163,13 @@ def self_play_rl_loop():
             old_log_probs_list = []
             prompt_len = idx.size(1)
             
-            for r in range(group_size):
+            from src.train import DistributedRolloutWorkerPool
+            worker_pool = DistributedRolloutWorkerPool()
+            rollouts = worker_pool.generate_parallel_rollouts(model, idx, group_size=group_size)
+
+            for r, sample_ids in enumerate(rollouts):
                 with torch.no_grad():
-                    sample_ids = model.generate(idx, max_new_tokens=32, temperature=0.8, agentic_mode=False)
                     sample_text = enc.decode(sample_ids[0].tolist())
-                    
                     old_logits, _ = model(sample_ids)
                     old_lprobs = torch.nn.functional.log_softmax(old_logits[:, :-1, :], dim=-1)
                     target_tokens = sample_ids[:, 1:]
@@ -178,7 +180,6 @@ def self_play_rl_loop():
                 exec_reward = 1.0 if "```python" in sample_text and "Error" not in sample_text else 0.2
                 total_reward = prm_score + exec_reward
                 rollout_rewards.append(total_reward)
-                rollouts.append(sample_ids)
             
             rewards_tensor = torch.tensor(rollout_rewards, dtype=torch.float32, device=device)
             mean_r = rewards_tensor.mean()

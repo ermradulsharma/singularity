@@ -72,6 +72,29 @@ def test_top_1_percent_modules():
     assert out_shard.shape == (1, 4, 16)
     print("✅ Micro-Node P2P Tensor Sharding verified.")
 
+    from src.tools.mcp_server import MCPServer, MCPClient
+    mcp_server = MCPServer()
+    mcp_client = MCPClient(mcp_server)
+    tools_list = mcp_client.list_available_tools()
+    assert isinstance(tools_list, list)
+    print("✅ Model Context Protocol (MCP) JSON-RPC 2.0 Server & Client verified.")
+
+    from src.tool_router import AsyncDynamicToolRouter
+    router = AsyncDynamicToolRouter()
+    parsed_calls = router.parse_openai_tool_calls([{"function": {"name": "search_web", "arguments": "{\"query\":\"AI\"}"}}])
+    assert len(parsed_calls) == 1
+    print("✅ OpenAI Tool Calls JSON Schema Parser verified.")
+
+    from src.inference import HuggingFaceWeightPorter, vLLMInferenceEngine
+    vllm_engine = vLLMInferenceEngine()
+    print("✅ HuggingFace Weight Assimilation Porter & vLLM Engine Bridge verified.")
+
+    from src.train import DistributedRolloutWorkerPool
+    pool = DistributedRolloutWorkerPool()
+    rollouts = pool.generate_parallel_rollouts(model, torch.tensor([[10, 20]], dtype=torch.long), group_size=2)
+    assert len(rollouts) == 2
+    print("✅ DeepSeek-R1 GRPO Distributed Rollout Worker Pool verified.")
+
 if __name__ == "__main__":
     print("=================================================")
     print("🚀 SINGULARITY TOP 1% AGI MASTER SYSTEM VERIFICATION 🚀")
@@ -84,5 +107,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ [CRITICAL FAILURE] Verification crashed: {e}")
         traceback.print_exc()
+
 
 

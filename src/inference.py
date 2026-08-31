@@ -70,7 +70,7 @@ def remap_state_dict(raw_state_dict: dict) -> dict:
     return remapped
 
 class AGIInferenceEngine:
-    def __init__(self):
+    def __init__(self, enable_fp8: bool = False, enable_compile: bool = False):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.config = ModelArgs()
         self.model = GPTLanguageModel(
@@ -79,6 +79,25 @@ class AGIInferenceEngine:
             self.config.num_experts, self.config.num_experts_per_tok,
             intermediate_size=self.config.intermediate_size
         ).to(self.device)
+        
+        if enable_fp8:
+            from src.model import FP8Linear
+            print("[SYSTEM] Converting Linear Layers to Hardware-Accelerated FP8Linear...")
+            for name, module in self.model.named_modules():
+                if isinstance(module, torch.nn.Linear) and module.in_features >= 64:
+                    fp8_layer = FP8Linear(module.in_features, module.out_features, bias=(module.bias is not None))
+                    fp8_layer.weight.data = module.weight.data.to(fp8_layer.weight.dtype)
+                    if module.bias is not None:
+                        fp8_layer.bias.data = module.bias.data
+                    setattr(self.model, name, fp8_layer)
+
+        if enable_compile and hasattr(torch, "compile"):
+            try:
+                print("[SYSTEM] JIT Compiling GPTLanguageModel with torch.compile...")
+                self.model = torch.compile(self.model)
+            except Exception as e:
+                print(f"[WARNING] torch.compile fallback: {e}")
+
         possible_brains = ["models/smollm_agi.safetensors", "models/tinyllama_agi.safetensors", "models/uncensored_agi.safetensors", "models/llama3_agi.safetensors", "models/deepseek_agi.safetensors"]
         weights_loaded = False
         loaded_brain = None
@@ -249,4 +268,50 @@ def generate_text(prompt: str, variant: str = None) -> str:
     if variant:
         _engine.load_variant(variant)
     return _engine.generate_response(prompt)
+
+class HuggingFaceWeightPorter:
+    """HuggingFace & SOTA Model Weight Assimilation Porter into safetensors format."""
+
+    @staticmethod
+    def assimilate_hf_model(repo_id: str, output_dir: str = "models") -> str:
+        """Ingests a HuggingFace hub model repository and converts weights to local safetensors format."""
+        try:
+            from huggingface_hub import snapshot_download
+            os.makedirs(output_dir, exist_ok=True)
+            local_path = snapshot_download(repo_id=repo_id, allow_patterns=["*.safetensors", "config.json", "tokenizer*"])
+            save_target = os.path.join(output_dir, "hf_assimilated.safetensors")
+            for root, _, files in os.walk(local_path):
+                for file in files:
+                    if file.endswith(".safetensors"):
+                        src_f = os.path.join(root, file)
+                        state_dict = safetensors.torch.load_file(src_f, device="cpu")
+                        remapped = remap_state_dict(state_dict)
+                        safetensors.torch.save_file(remapped, save_target)
+                        return f"[SUCCESS] Assimilated HF repo {repo_id} -> {save_target}"
+            return f"[INFO] Downloaded {repo_id} to {local_path}"
+        except Exception as e:
+            return f"[ERROR] Failed HF assimilation for {repo_id}: {e}"
+
+class vLLMInferenceEngine:
+    """Production vLLM C++ acceleration backend engine fallback for high-throughput serving."""
+
+    def __init__(self, model_path: str = "models"):
+        self.is_vllm_available = False
+        try:
+            from vllm import LLM, SamplingParams
+            self.vllm_engine = LLM(model=model_path, trust_remote_code=True)
+            self.SamplingParams = SamplingParams
+            self.is_vllm_available = True
+        except Exception:
+            self.vllm_engine = None
+
+    def generate(self, prompt: str, max_tokens: int = 128, temperature: float = 0.7) -> str:
+        """High-throughput text generation via vLLM C++ engine when available."""
+        if not self.is_vllm_available or self.vllm_engine is None:
+            engine = AGIInferenceEngine()
+            return engine.generate_response(prompt, max_new_tokens=max_tokens)
+        sampling_params = self.SamplingParams(temperature=temperature, max_tokens=max_tokens)
+        outputs = self.vllm_engine.generate([prompt], sampling_params)
+        return outputs[0].outputs[0].text
+
 
