@@ -114,7 +114,17 @@ class FP8Linear(nn.Module):
         else:
             self.register_parameter('bias', None)
 
+    def calibrate_scales(self, x: torch.Tensor):
+        """Dynamically calibrates input and weight FP8 scaling factors for E4M3 quantization."""
+        with torch.no_grad():
+            max_val = x.abs().max()
+            if max_val > 0:
+                self.input_scale.copy_(max_val / 448.0)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            self.calibrate_scales(x)
+
         if hasattr(torch, 'float8_e4m3fn') and x.is_cuda and self.weight.dtype == torch.float8_e4m3fn:
             try:
                 x_fp8 = x.to(torch.float8_e4m3fn)
@@ -233,9 +243,10 @@ class UniversalDynamicBlock(nn.Module):
         )
         x = x + self.graph['attn']['wo'](y.transpose(1, 2).reshape(B, T, C))
         
+        aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         nx = self.graph['norm2'](x)
         if self.is_moe:
-            # Zero-Loop Vectorized Shared + Top-K Routed Experts
+            # Zero-Loop Vectorized Shared + Top-K Routed Experts with Aux Load Balancing Loss
             shared_out = self.graph['shared_expert'](nx)
             
             router_logits = self.graph['router'](nx)
@@ -243,10 +254,16 @@ class UniversalDynamicBlock(nn.Module):
             topk_weights, topk_indices = torch.topk(routing_weights, self.e_t, dim=-1)
             topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-8)
             
+            # Compute MoE Auxiliary Load Balancing Loss
+            E = len(self.graph['experts'])
+            p_i = routing_weights.view(-1, E).mean(dim=0)
+            expert_mask = F.one_hot(topk_indices, num_classes=E).float()
+            f_i = expert_mask.view(-1, E).mean(dim=0)
+            aux_loss = 0.01 * E * torch.sum(f_i * p_i)
+
             flat_nx = nx.view(-1, C)
             flat_indices = topk_indices.view(-1, self.e_t)
             flat_weights = topk_weights.view(-1, self.e_t)
-            E = len(self.graph['experts'])
             
             expert_masks = F.one_hot(flat_indices, num_classes=E)
             w1_list = [exp[0].weight for exp in self.graph['experts']]
@@ -266,7 +283,7 @@ class UniversalDynamicBlock(nn.Module):
             x = x + shared_out + moe_out
         else:
             x = x + self.graph['ffn'](nx)
-        return x, pkv
+        return x, pkv, aux_loss
 
 class PatchMerger(nn.Module):
     """2x2 Spatial Patch Merging Layer for vision token compression and dynamic resolution scaling."""
@@ -317,6 +334,40 @@ class VisionEncoder(nn.Module):
         x_proj = self.proj(self.ln(x_patches))
         return self.merger(x_proj, patch_h, patch_w)
 
+class MultiModalCrossAttentionConnector(nn.Module):
+    """
+    Perceiver Resampler-style Cross-Attention Adapter Connector for multi-modal alignment.
+    Replaces naive token concatenation by cross-attending model sequence queries over multi-modal key/values.
+    """
+    def __init__(self, d_model: int, num_heads: int = 4):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.norm_context = nn.LayerNorm(d_model)
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x: torch.Tensor, modal_features: torch.Tensor) -> torch.Tensor:
+        """
+        x: [B, T, D] text hidden state embeddings
+        modal_features: [B, N_modal, D] vision or speech embeddings
+        """
+        B, T, D = x.size()
+        B_m, N, _ = modal_features.size()
+        if B_m != B:
+            modal_features = modal_features.expand(B, -1, -1)
+            
+        q = self.q_proj(x).view(B, T, self.num_heads, D // self.num_heads).transpose(1, 2)
+        k = self.k_proj(self.norm_context(modal_features)).view(B, N, self.num_heads, D // self.num_heads).transpose(1, 2)
+        v = self.v_proj(self.norm_context(modal_features)).view(B, N, self.num_heads, D // self.num_heads).transpose(1, 2)
+        
+        attn_out = F.scaled_dot_product_attention(q, k, v)
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, D)
+        return x + self.out_proj(attn_out)
+
+
 class GPTLanguageModel(nn.Module):
     def __init__(self, vocab_size, n_embd, n_head, n_kv_head, n_layer, block_size, num_experts, num_experts_per_tok, dropout=0.0, intermediate_size=None):
         super().__init__()
@@ -328,6 +379,7 @@ class GPTLanguageModel(nn.Module):
             'tok_emb': nn.Embedding(vocab_size, n_embd),
             'vision': VisionEncoder(dim=n_embd),
             'speech_proj': InterleavedSpeechProjector(d_model=n_embd, audio_dim=64),
+            'multimodal_connector': MultiModalCrossAttentionConnector(d_model=n_embd, num_heads=n_head),
             'audio_head': DiscreteAudioHead(d_model=n_embd, num_audio_tokens=1024),
             'blocks': nn.ModuleList([UniversalDynamicBlock(n_embd, n_head, n_kv_head, num_experts, num_experts_per_tok) for _ in range(n_layer)]),
             'ln_f': nn.LayerNorm(n_embd),
@@ -375,28 +427,28 @@ class GPTLanguageModel(nn.Module):
         
         if images is not None: 
             image_embeds = self.graph['vision'](images)
-            x = torch.cat([image_embeds, x], dim=1)
+            x = self.graph['multimodal_connector'](x, image_embeds)
             
         if speech_features is not None:
             speech_embeds = self.graph['speech_proj'](speech_features)
-            x = torch.cat([speech_embeds, x], dim=1)
+            x = self.graph['multimodal_connector'](x, speech_embeds)
         
         pkv = [] if use_cache else None
+        total_aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         for i, block in enumerate(self.graph['blocks']):
-            x, p = block(x, self.freqs_cis, use_cache, past_key_values[i] if past_key_values else None)
+            x, p, aux_l = block(x, self.freqs_cis, use_cache, past_key_values[i] if past_key_values else None)
             if use_cache: pkv.append(p)
+            total_aux_loss = total_aux_loss + aux_l
             
         x = self.graph['ln_f'](x)
         for sub in self.sub_brains.values():
             try: x = x + sub(x)
             except Exception: pass
             
-        prefix_len = (image_embeds.size(1) if images is not None else 0) + (speech_embeds.size(1) if speech_features is not None else 0)
-        if prefix_len > 0:
-            x = x[:, prefix_len:, :]
-            
         logits = self.graph['lm_head'](x)
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100) if targets is not None else None
+        if loss is not None:
+            loss = loss + total_aux_loss
         
         if return_medusa:
             medusa_logits = [m_head(x) for m_head in self.graph['medusa_heads']]

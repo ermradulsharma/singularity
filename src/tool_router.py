@@ -99,10 +99,13 @@ class ConstrainedStructuredToolRouter:
             func = getattr(module, function_name)
             obs = await asyncio.to_thread(func, **kwargs)
             return f"[{tool_name}.{function_name} Result]: {obs}"
-        except ModuleNotFoundError:
-            return f"[ERROR] Tool module not found: {tool_name}"
-        except AttributeError:
-            return f"[ERROR] Function '{function_name}' not found in tool module '{tool_name}'"
+        except (ModuleNotFoundError, AttributeError):
+            from src.tools.mcp_server import MCPServer
+            mcp = MCPServer()
+            res = mcp.call_tool(tool_name, kwargs)
+            if not res.get("isError"):
+                return f"[MCP Tool '{tool_name}' Result]: {res['content'][0]['text']}"
+            return f"[ERROR] Tool module or MCP tool not found: {tool_name}"
         except Exception as e:
             return f"[ERROR] Tool execution failed: {str(e)}"
 

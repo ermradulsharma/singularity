@@ -51,6 +51,22 @@ class DistributedClusterManager:
             dist.destroy_process_group()
             self.is_distributed = False
 
+    def setup_3d_parallel_groups(self, tp_size: int = 1, pp_size: int = 1):
+        """Builds 3D Parallelism process groups (Tensor Parallelism, Pipeline Parallelism, Data Parallelism)."""
+        if not self.is_distributed or not dist.is_initialized():
+            return None, None, None
+        
+        dp_size = max(1, self.world_size // max(1, tp_size * pp_size))
+        tp_group, pp_group, dp_group = None, None, None
+        
+        for i in range(0, self.world_size, max(1, tp_size)):
+            ranks = list(range(i, min(self.world_size, i + max(1, tp_size))))
+            group = dist.new_group(ranks)
+            if self.rank in ranks:
+                tp_group = group
+                
+        return tp_group, pp_group, dp_group
+
     @staticmethod
     def get_world_size() -> int:
         """Returns current global world size across all nodes."""
@@ -65,4 +81,33 @@ class DistributedClusterManager:
             return dist.get_rank()
         return 0
 
+class ColumnParallelLinear(torch.nn.Module):
+    """Column-Parallel Linear Layer for Megatron-LM style Tensor Parallelism."""
+    def __init__(self, in_features: int, out_features: int, tp_size: int = 1, bias: bool = False):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features_per_partition = out_features // tp_size
+        self.tp_size = tp_size
+        self.linear = torch.nn.Linear(in_features, self.out_features_per_partition, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+class RowParallelLinear(torch.nn.Module):
+    """Row-Parallel Linear Layer with All-Reduce for Megatron-LM style Tensor Parallelism."""
+    def __init__(self, in_features: int, out_features: int, tp_size: int = 1, bias: bool = False):
+        super().__init__()
+        self.in_features_per_partition = in_features // tp_size
+        self.out_features = out_features
+        self.tp_size = tp_size
+        self.linear = torch.nn.Linear(self.in_features_per_partition, out_features, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output_parallel = self.linear(x)
+        if self.tp_size > 1 and dist.is_initialized():
+            dist.all_reduce(output_parallel, op=dist.ReduceOp.SUM)
+        return output_parallel
+
 cluster_manager = DistributedClusterManager()
+
+

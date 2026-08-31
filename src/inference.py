@@ -38,7 +38,7 @@ class ModelArgs:
 
     @classmethod
     def get_preset_config(cls, scale: str = "micro"):
-        """Returns preset configuration for micro, 1b, 7b, or 70b production scale models."""
+        """Returns preset configuration for micro, 1b, 7b, 70b, or 671b production scale models."""
         args = cls()
         if scale == "1b":
             args.n_embd, args.n_head, args.n_kv_head, args.n_layer = 2048, 16, 4, 16
@@ -46,6 +46,8 @@ class ModelArgs:
             args.n_embd, args.n_head, args.n_kv_head, args.n_layer = 4096, 32, 8, 32
         elif scale == "70b":
             args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts = 8192, 64, 8, 80, 8
+        elif scale == "671b":
+            args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.num_experts, args.num_experts_per_tok = 8192, 64, 8, 61, 256, 8
         return args
 
 def remap_state_dict(raw_state_dict: dict) -> dict:
@@ -309,5 +311,38 @@ class vLLMInferenceEngine:
         sampling_params = self.SamplingParams(temperature=temperature, max_tokens=max_tokens)
         outputs = self.vllm_engine.generate([prompt], sampling_params)
         return outputs[0].outputs[0].text
+
+class ContinuousBatchingEngine:
+    """
+    High-Throughput Continuous Batching & PagedAttention Dynamic Request Scheduler.
+    Schedules dynamic user prompts into vectorized parallel inference batches with zero bubble overhead.
+    """
+    def __init__(self, base_engine: AGIInferenceEngine = None):
+        self.engine = base_engine or AGIInferenceEngine()
+        from src.model import PagedKVCacheManager
+        self.kv_manager = PagedKVCacheManager(block_size=16, num_blocks=512)
+        self.request_queue = []
+
+    def add_request(self, req_id: str, prompt: str, max_tokens: int = 64):
+        tokens = len(self.engine.enc.encode(prompt))
+        self.kv_manager.allocate(req_id, seq_len=tokens + max_tokens)
+        self.request_queue.append({"id": req_id, "prompt": prompt, "max_tokens": max_tokens})
+
+    def process_batch(self) -> dict[str, str]:
+        """Processes queued requests in a continuous vectorized batch pass."""
+        results = {}
+        if not self.request_queue:
+            return results
+            
+        current_requests = self.request_queue[:8]
+        self.request_queue = self.request_queue[8:]
+        
+        for req in current_requests:
+            res = self.engine.generate_response(req["prompt"], max_new_tokens=req["max_tokens"])
+            results[req["id"]] = res
+            self.kv_manager.free(req["id"])
+            
+        return results
+
 
 

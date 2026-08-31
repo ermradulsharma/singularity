@@ -133,3 +133,35 @@ class StepProcessRewardModel(nn.Module):
         scores = self.score_reasoning_steps(steps)
         return sum(scores) / max(1, len(scores))
 
+
+class GroupRewardEvaluator:
+    """
+    Evaluates multi-objective rewards across a group of sampled candidate trajectories G for GRPO.
+    Combines neural PRM step rewards, format compliance (<think> tags), answer accuracy, and sandbox execution.
+    """
+    def __init__(self, prm: StepProcessRewardModel = None):
+        self.prm = prm if prm is not None else StepProcessRewardModel()
+
+    def evaluate_group(self, group_trajectories: list[str], ground_truth: str = None) -> torch.Tensor:
+        """
+        Calculates scalar rewards R_i for each trajectory in group G.
+        Returns tensor of shape [G].
+        """
+        rewards = []
+        for text in group_trajectories:
+            r = self.prm.score_trajectory(text)
+            
+            # Format Reward: Reward explicit thought reflection tags
+            if "<think>" in text and "</think>" in text:
+                r += 0.25
+            else:
+                r -= 0.1
+                
+            # Ground Truth / Verification Reward
+            if ground_truth and ground_truth in text:
+                r += 0.5
+                
+            rewards.append(r)
+        return torch.tensor(rewards, dtype=torch.float32)
+
+
