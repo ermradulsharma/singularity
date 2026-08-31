@@ -127,7 +127,7 @@ def self_play_rl_loop():
     ).to(device)
     
     import copy
-    ref_model = copy.deepcopy(model).to(device)
+    ref_model = copy.deepcopy(model).to("cpu")
     ref_model.eval()
     for param in ref_model.parameters():
         param.requires_grad = False
@@ -147,6 +147,8 @@ def self_play_rl_loop():
     group_size = 4
     clip_eps = 0.2
     kl_beta = 0.04
+    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     
     while True:
         try:
@@ -198,9 +200,11 @@ def self_play_rl_loop():
                     gen_log_probs = token_log_probs[:, max(0, prompt_len - 1):]
                     
                     with torch.no_grad():
-                        ref_logits, _ = ref_model(sample_ids)
+                        sample_ids_cpu = sample_ids.to("cpu")
+                        target_tokens_cpu = sample_ids_cpu[:, 1:]
+                        ref_logits, _ = ref_model(sample_ids_cpu)
                         ref_lprobs = torch.nn.functional.log_softmax(ref_logits[:, :-1, :], dim=-1)
-                        ref_token_lprobs = ref_lprobs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)[:, max(0, prompt_len - 1):]
+                        ref_token_lprobs = ref_lprobs.gather(2, target_tokens_cpu.unsqueeze(-1)).squeeze(-1)[:, max(0, prompt_len - 1):].to(device)
                     
                     if gen_log_probs.size(1) > 0:
                         old_lp = old_log_probs_list[r_idx]
@@ -223,19 +227,9 @@ def self_play_rl_loop():
             grpo_loss.backward()
             optimizer.step()
             
-            telemetry = {
-                "iteration": iteration,
-                "grpo_loss": float(grpo_loss.item()),
-                "kl_penalty": float(kl_loss_total.item()),
-                "mean_reward": float(mean_r.item()),
-                "std_reward": float(std_r.item()),
-                "status": "success",
-                "timestamp": time.time()
-            }
-            os.makedirs("data", exist_ok=True)
-            with open("data/telemetry.jsonl", "a") as f:
-                f.write(json.dumps(telemetry) + "\n")
-            print(f"[Iteration {iteration}] DeepSeek-R1 GRPO Loss: {grpo_loss.item():.4f} | KL: {kl_loss_total.item():.4f} | Mean Reward: {mean_r.item():.4f} - Logged.")
+            telemetry_msg = f"[Iteration {iteration}] DeepSeek-R1 GRPO Loss: {grpo_loss.item():.4f} | KL: {kl_loss_total.item():.4f} | Mean Reward: {mean_r.item():.4f}"
+            logger.log("INFO", "GRPO_RL", telemetry_msg)
+            print(f"{telemetry_msg} - Logged.")
             
             if iteration % 10 == 0:
                 os.makedirs("models", exist_ok=True)
@@ -267,16 +261,7 @@ def self_play_rl_loop():
             time.sleep(2)
             
         except Exception as e:
-            error_telemetry = {
-                "iteration": iteration,
-                "status": "error",
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-                "timestamp": time.time()
-            }
-            os.makedirs("data", exist_ok=True)
-            with open("data/telemetry.jsonl", "a") as f:
-                f.write(json.dumps(error_telemetry) + "\n")
+            logger.log("ERROR", "GRPO_RL", f"[CRITICAL ERROR] Iteration {iteration} failed: {e}\n{traceback.format_exc()}")
             print(f"[CRITICAL ERROR] Encountered issue in iteration {iteration}. Recovering loop. Error: {e}")
             time.sleep(2)
 
