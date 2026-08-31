@@ -10,13 +10,13 @@ import safetensors.torch
 
 class ModelArgs:
     vocab_size = 50257 + 6
-    n_embd = 4096
-    n_head = 32
-    n_kv_head = 8
-    n_layer = 32
-    block_size = 2048
-    num_experts = 4
-    num_experts_per_tok = 2
+    n_embd = 128
+    n_head = 4
+    n_kv_head = 2
+    n_layer = 2
+    block_size = 512
+    num_experts = 2
+    num_experts_per_tok = 1
     dropout = 0.0
     intermediate_size = None
 
@@ -67,6 +67,13 @@ class AGIInferenceEngine:
                     break
                 except Exception as e:
                     print(f"[WARNING] Failed to load brain '{brain_path}': {e}")
+
+        current_emb_vocab = self.model.graph['tok_emb'].weight.size(0)
+        if current_emb_vocab < self.config.vocab_size:
+            padding = torch.zeros(self.config.vocab_size - current_emb_vocab, self.model.graph['tok_emb'].weight.size(1), device=self.model.graph['tok_emb'].weight.device, dtype=self.model.graph['tok_emb'].weight.dtype)
+            new_weight = torch.nn.Parameter(torch.cat([self.model.graph['tok_emb'].weight.data, padding], dim=0))
+            self.model.graph['tok_emb'].weight = new_weight
+            self.model.graph['lm_head'].weight = new_weight
                     
         import tiktoken
         try:

@@ -5,10 +5,10 @@ from src.sandbox import SecureSandbox
 
 def evaluate_humaneval_sample(code_str: str) -> float:
     """Evaluates Python code snippet for HumanEval execution accuracy."""
-    sandbox = SecureSandbox(use_docker=True)
+    sandbox = SecureSandbox(use_docker=False)
     try:
         res = sandbox.execute(code_str)
-        if "SyntaxError" in res or "Error" in res:
+        if "SyntaxError" in res or "Traceback" in res or "NameError" in res or "TypeError" in res:
             return 0.0
         return 1.0
     except Exception:

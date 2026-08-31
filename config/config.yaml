@@ -12,7 +12,6 @@ model:
     image_size: 224
     patch_size: 16
     in_channels: 3
-  dropout: 0.2
 
 training:
   batch_size: 16
@@ -26,4 +25,3 @@ training:
 paths:
   hf_dataset_name: "data/processed/omni_science.jsonl" 
   model_save: "models/gpt_finetuned.safetensors"
-
