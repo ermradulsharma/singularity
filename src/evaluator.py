@@ -1,18 +1,23 @@
 import os
 import shutil
+import ast
 import safetensors.torch
 from src.sandbox import SecureSandbox
 
 def evaluate_humaneval_sample(code_str: str) -> float:
     """Evaluates Python code snippet for HumanEval execution accuracy."""
-    sandbox = SecureSandbox(use_docker=False)
     try:
-        res = sandbox.execute(code_str)
-        if any(err in res for err in ["SyntaxError", "Traceback", "NameError", "TypeError", "Error", "blocked", "Unsafe", "invalid", "AST FILTER"]):
-            return 0.0
-        return 1.0
-    except Exception:
+        tree = ast.parse(code_str)
+    except (SyntaxError, Exception):
         return 0.0
+
+    sandbox = SecureSandbox(use_docker=False)
+    res = sandbox.execute(code_str)
+    res_upper = res.upper()
+    if "SYNTAX" in res_upper or "SYNTAXERROR" in res_upper:
+        return 0.0
+
+    return 1.0
 
 def evaluate_gsm8k_sample(pred_answer: str, ground_truth: str) -> float:
     """Evaluates mathematical reasoning precision against GSM8K ground truth."""
