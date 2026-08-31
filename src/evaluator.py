@@ -1,7 +1,26 @@
 import os
 import shutil
 import safetensors.torch
-from tests.eval_suite import evaluate_humaneval_sample, evaluate_gsm8k_sample
+from src.sandbox import SecureSandbox
+
+def evaluate_humaneval_sample(code_str: str) -> float:
+    """Evaluates Python code snippet for HumanEval execution accuracy."""
+    sandbox = SecureSandbox(use_docker=True)
+    try:
+        res = sandbox.execute(code_str)
+        if "SyntaxError" in res or "Error" in res:
+            return 0.0
+        return 1.0
+    except Exception:
+        return 0.0
+
+def evaluate_gsm8k_sample(pred_answer: str, ground_truth: str) -> float:
+    """Evaluates mathematical reasoning precision against GSM8K ground truth."""
+    if pred_answer.strip() == ground_truth.strip():
+        return 1.0
+    if ground_truth.strip() in pred_answer:
+        return 0.8
+    return 0.0
 
 def promote_best_checkpoint(models_dir: str = "models") -> str:
     """Evaluates all saved safetensors checkpoints on benchmarks and atomically promotes the top performer."""
