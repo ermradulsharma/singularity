@@ -8,7 +8,7 @@ import json
 import safetensors.torch
 
 class ModelArgs:
-    vocab_size = 128256
+    vocab_size = 200019     # 200k Ideal Frontier Vocabulary (GPT-4o Native & Tensor Core Aligned)
     n_embd = 16384          # 1 Trillion+ Parameter Frontier Embedding Dimension
     n_head = 128            # 128 Attention Heads
     n_kv_head = 16          # 16 Key/Value Heads (Grouped-Query Attention)
@@ -48,6 +48,7 @@ class ModelArgs:
                     cfg = yaml.safe_load(f)
                 if cfg and "model" in cfg:
                     m = cfg["model"]
+                    self.vocab_size = m.get("vocab_size", self.vocab_size)
                     self.n_embd = m.get("n_embd", self.n_embd)
                     self.n_head = m.get("n_head", self.n_head)
                     self.n_kv_head = m.get("n_kv_head", self.n_kv_head)

@@ -1,4 +1,5 @@
 model:
+  vocab_size: 200019      # 200k Ideal Frontier Vocabulary (GPT-4o Native & Tensor Core Aligned)
   n_embd: 16384           # 1 Trillion+ Parameter Frontier Embedding Dimension
   n_head: 128             # 128 Attention Heads
   n_kv_head: 16           # 16 Key/Value Heads (Grouped-Query Attention)

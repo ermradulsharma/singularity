@@ -227,7 +227,7 @@ class GrammarConstrainedLogitProcessor:
     Constrained Token Logit Mask Processor for 100% Guaranteed JSON Schema Compliance.
     Enforces JSON State Machine transitions to hard-mask illegal token logits during LLM sampling steps.
     """
-    def __init__(self, allowed_json_keys: Optional[List[str]] = None, vocab_size: int = 128256):
+    def __init__(self, allowed_json_keys: Optional[List[str]] = None, vocab_size: int = 200019):
         self.allowed_keys = allowed_json_keys or ["tool", "function", "kwargs", "query", "ticker", "code"]
         self.vocab_size = vocab_size
         self.state_tracker = JSONStateTracker()
