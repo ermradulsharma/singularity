@@ -196,18 +196,78 @@ class PagedKVCacheManager:
             self.free_blocks.extend(self.allocated_pages.pop(session_id))
 
 
+class MambaSelectiveSSM(nn.Module):
+    """
+    SOTA Mamba-2 Style Selective State Space Model (SSM) Layer.
+    Provides linear-time sequence modeling O(N) context scaling with data-dependent discretization.
+    """
+    def __init__(self, d_model: int, d_state: int = 16, d_conv: int = 4, expand: int = 2):
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_inner = int(expand * d_model)
+        
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+        self.conv1d = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            kernel_size=d_conv,
+            bias=True,
+            padding=d_conv - 1,
+            groups=self.d_inner
+        )
+        self.x_proj = nn.Linear(self.d_inner, self.d_state * 2 + 1, bias=False)
+        self.dt_proj = nn.Linear(1, self.d_inner, bias=True)
+        
+        A = torch.arange(1, d_state + 1, dtype=torch.float32).repeat(self.d_inner, 1)
+        self.A_log = nn.Parameter(torch.log(A))
+        self.D = nn.Parameter(torch.ones(self.d_inner))
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, D = x.shape
+        xz = self.in_proj(x)
+        x_proj, z = xz.chunk(2, dim=-1)
+        
+        x_conv = x_proj.transpose(1, 2)
+        x_conv = self.conv1d(x_conv)[:, :, :T].transpose(1, 2)
+        x_act = F.silu(x_conv)
+        
+        x_ssm = self.x_proj(x_act)
+        B_mat, C_mat, dt = x_ssm.split([self.d_state, self.d_state, 1], dim=-1)
+        
+        delta = F.softplus(self.dt_proj(dt))
+        A = -torch.exp(self.A_log)
+        
+        delta_A = torch.exp(delta.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(0))
+        delta_B = delta.unsqueeze(-1) * B_mat.unsqueeze(2)
+        
+        h = torch.zeros((B, self.d_inner, self.d_state), device=x.device, dtype=x.dtype)
+        y_list = []
+        for t in range(T):
+            h = delta_A[:, t] * h + delta_B[:, t] * x_act[:, t:t+1].transpose(1, 2)
+            y_t = (h * C_mat[:, t].unsqueeze(1)).sum(dim=-1)
+            y_list.append(y_t)
+            
+        y = torch.stack(y_list, dim=1)
+        y = y + x_act * self.D.unsqueeze(0).unsqueeze(0)
+        y = y * F.silu(z)
+        return self.out_proj(y)
+
+
 class UniversalDynamicBlock(nn.Module):
     """
     Dynamically routes tensors through Dense, GQA, MLA (Multi-Head Latent Attention), 
-    or Shared+Routed MoE layers algorithmically.
-    Implements 2026 DeepSeek-V3 SOTA Multi-Head Latent Attention & Zero-Loop Vectorized MoE Routing.
+    Mamba-2 SSM (Selective State Space), or Shared+Routed MoE layers algorithmically.
+    Implements 2026 DeepSeek-V3 SOTA Multi-Head Latent Attention & Hybrid SSM-Attention.
     """
-    def __init__(self, d, h, kv, e, e_t, kv_lora_rank=128):
+    def __init__(self, d, h, kv, e, e_t, kv_lora_rank=128, use_ssm=False):
         super().__init__()
         self.h, self.kv, self.hd = h, kv, d // h
         self.is_moe = e > 0
         self.e_t = e_t
         self.kv_lora_rank = min(kv_lora_rank, d)
+        self.use_ssm = use_ssm
         
         self.graph = nn.ModuleDict({
             'norm1': nn.LayerNorm(d), 'norm2': nn.LayerNorm(d),
@@ -221,6 +281,7 @@ class UniversalDynamicBlock(nn.Module):
                 'kv_up_k': nn.Linear(self.kv_lora_rank, kv*self.hd, bias=False),
                 'kv_up_v': nn.Linear(self.kv_lora_rank, kv*self.hd, bias=False),
             }),
+            'ssm': MambaSelectiveSSM(d_model=d) if use_ssm else None
         })
         
         if self.is_moe:
@@ -267,8 +328,9 @@ class UniversalDynamicBlock(nn.Module):
             q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), 
             is_causal=(T > 1 and not past_kv)
         )
-        x = x + self.graph['attn']['wo'](y.transpose(1, 2).reshape(B, T, C))
-        
+        if self.use_ssm and self.graph['ssm'] is not None:
+            x = x + self.graph['ssm'](nx)
+            
         aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         nx = self.graph['norm2'](x)
         if self.is_moe:

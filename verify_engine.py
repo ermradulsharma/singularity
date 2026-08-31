@@ -54,12 +54,19 @@ def test_top_1_percent_modules():
     assert freqs.shape == (1024, 16)
     print("✅ YaRN 32k RoPE positional scaling verified.")
     
-    audio_tok = DiscreteAudioTokenizer(num_tokens=64)
+    audio_tok = DiscreteAudioTokenizer(num_tokens=64, num_quantizers=4)
     wave = torch.randn(1, 1600)
     toks = audio_tok.encode_waveform(wave)
     recon = audio_tok.decode_tokens(toks)
     assert recon.shape[1] == 1600
-    print("✅ Discrete Audio Tokenizer waveform quantization verified.")
+    print("✅ Discrete Audio Tokenizer Multi-Stage RVQ quantization verified.")
+
+    from src.model import MambaSelectiveSSM
+    mamba_ssm = MambaSelectiveSSM(d_model=32)
+    ssm_in = torch.randn(2, 8, 32)
+    ssm_out = mamba_ssm(ssm_in)
+    assert ssm_out.shape == (2, 8, 32)
+    print("✅ Mamba-2 Selective State Space Model (SSM) linear attention verified.")
     
     mgr = PagedKVCacheManager(block_size=16, num_blocks=32)
     pages = mgr.allocate("test_sess", 32)

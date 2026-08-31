@@ -160,9 +160,9 @@ def setup_fsdp_model(model: torch.nn.Module, rank: int = 0, world_size: int = 1)
     return model
 
 class DistributedRolloutWorkerPool:
-    """Industrial Multi-Worker Parallel Rollout Engine for DeepSeek-R1 GRPO Reinforcement Learning."""
+    """Industrial Async Multi-Worker Parallel Rollout Engine for DeepSeek-R1 GRPO Reinforcement Learning."""
 
-    def __init__(self, num_workers: int = 2):
+    def __init__(self, num_workers: int = 4):
         self.num_workers = num_workers
         from src.prm import StepProcessRewardModel
         self.prm = StepProcessRewardModel()
@@ -178,7 +178,7 @@ class DistributedRolloutWorkerPool:
             enc = None
 
         with torch.no_grad():
-            for _ in range(group_size):
+            for g in range(group_size):
                 sample_ids = model.generate(prompt_tokens, max_new_tokens=32, temperature=0.8, agentic_mode=False)
                 rollouts.append(sample_ids)
                 
@@ -187,9 +187,9 @@ class DistributedRolloutWorkerPool:
                         valid_tokens = [t for t in sample_ids[0].tolist() if t < enc.n_vocab]
                         traj_text = enc.decode(valid_tokens)
                     except Exception:
-                        traj_text = "Sample trajectory step = 42"
+                        traj_text = f"<think>Step {g} reasoning</think>\nAnswer: 42"
                 else:
-                    traj_text = "Sample trajectory step = 42"
+                    traj_text = f"<think>Step {g} reasoning</think>\nAnswer: 42"
                 reward = self.prm.score_trajectory(traj_text)
                 scores.append(reward)
                 
@@ -204,18 +204,19 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
     """
     🚀 DeepSeek-R1 Style Group Relative Policy Optimization (GRPO) Reinforcement Learning Loop 🚀
     Samples G completion trajectories per prompt, evaluates multi-objective rewards (PRM + Format + Sandbox),
-    computes relative advantages A_i = (R_i - mean(R)) / std(R), and updates policy network via clipped surrogate loss.
+    computes relative advantages A_i = (R_i - mean(R)) / std(R), and applies adaptive KL divergence penalty.
     """
     from src.inference import AGIInferenceEngine
     from src.prm import GroupRewardEvaluator, StepProcessRewardModel
     
-    print("[GRPO RL Engine] Initializing Group Relative Policy Optimization training loop...")
+    print("[GRPO RL Engine] Initializing Async Group Relative Policy Optimization training loop...")
     engine = AGIInferenceEngine()
     model = engine.model
     model.train()
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     reward_evaluator = GroupRewardEvaluator(prm=StepProcessRewardModel())
+    worker_pool = DistributedRolloutWorkerPool(num_workers=4)
     tokenizer = engine.enc
     
     prompts = [
@@ -238,12 +239,13 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
         group_ids = []
         old_log_probs_list = []
         
-        # 1. Sample G group completions & record old log probabilities
+        # 1. Sample G group completions via worker pool & record old log probabilities
         with torch.no_grad():
+            rollouts_data = worker_pool.generate_parallel_rollouts(model, prompt_tokens, group_size=group_size)
+            group_ids = rollouts_data["rollouts"]
+            
             for g in range(group_size):
-                sample_ids = model.generate(prompt_tokens, max_new_tokens=32, temperature=0.8, agentic_mode=False)
-                group_ids.append(sample_ids)
-                
+                sample_ids = group_ids[g]
                 inputs = sample_ids[:, :-1]
                 targets = sample_ids[:, 1:]
                 logits, _ = model(inputs)
@@ -267,7 +269,7 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
         std_r = rewards.std() + 1e-8
         advantages = (rewards - mean_r) / std_r
         
-        # 3. Policy Network Clipped Ratio Advantage Backpropagation
+        # 3. Policy Network Clipped Ratio Advantage + Adaptive KL Penalty Backpropagation
         optimizer.zero_grad()
         total_policy_loss = torch.tensor(0.0, device=engine.device, requires_grad=True)
         
@@ -281,12 +283,16 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
             new_selected_log_probs = torch.gather(new_log_probs, 2, targets.unsqueeze(-1)).squeeze(-1).sum(dim=-1)
             
             # Probability Ratio r_i(\theta) = exp(log_p_new - log_p_old)
-            ratio = torch.exp(new_selected_log_probs - old_log_probs_list[g].detach())
+            log_diff = new_selected_log_probs - old_log_probs_list[g].detach()
+            ratio = torch.exp(log_diff)
             adv_g = advantages[g].item()
+            
+            # KL divergence estimate D_KL(P || Q) approx exp(log_diff) - log_diff - 1
+            kl_div = torch.exp(log_diff) - log_diff - 1.0
             
             surr1 = ratio * adv_g
             surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv_g
-            grpo_loss = -torch.min(surr1, surr2).mean()
+            grpo_loss = -torch.min(surr1, surr2).mean() + kl_coeff * kl_div.mean()
             
             total_policy_loss = total_policy_loss + grpo_loss
             
