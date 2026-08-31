@@ -43,6 +43,25 @@ class ConstrainedStructuredToolRouter:
         """Returns JSON schema definitions of registered tools for constrained prompt alignment."""
         return json.dumps(self.registered_schemas, indent=2)
 
+    def _repair_malformed_json(self, raw_str: str) -> dict:
+        """Attempts resilient JSON repair for malformed LLM JSON outputs."""
+        cleaned = raw_str.strip()
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Fix single quotes to double quotes, trailing commas, and unescaped newlines
+        repaired = re.sub(r"'([^'\\]*(?:\\.[^'\\]*)*)'", r'"\1"', cleaned)
+        repaired = re.sub(r",\s*([\}\]])", r"\1", repaired)
+        if not repaired.endswith("}") and repaired.startswith("{"):
+            repaired += "}"
+            
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as err:
+            raise err
+
     def extract_raw_json_blocks(self, text: str) -> List[str]:
         """Extracts JSON tool blocks from <tool_call>, markdown ```json, or raw JSON structures."""
         extracted = []
@@ -117,10 +136,10 @@ class ConstrainedStructuredToolRouter:
         tasks = []
         for block in raw_blocks:
             try:
-                raw_json = json.loads(block.strip())
+                raw_json = self._repair_malformed_json(block.strip())
                 validated_payload = ToolCallPayload(**raw_json)
                 tasks.append(self._execute_validated_tool(validated_payload))
-            except (json.JSONDecodeError, ValidationError) as ve:
+            except Exception as ve:
                 tasks.append(asyncio.to_thread(lambda: f"[VALIDATION ERROR] Tool schema invalid: {ve}"))
 
         results = await asyncio.gather(*tasks)
@@ -136,7 +155,7 @@ class ConstrainedStructuredToolRouter:
         observations = []
         for block in raw_blocks:
             try:
-                raw_json = json.loads(block.strip())
+                raw_json = self._repair_malformed_json(block.strip())
                 payload = ToolCallPayload(**raw_json)
                 tool_name = payload.tool
                 kwargs = payload.kwargs

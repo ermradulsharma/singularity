@@ -33,6 +33,16 @@ class UnifiedTokenizer:
         except Exception:
             return self.enc.encode(text)
 
+    @property
+    def eot_token(self) -> int:
+        """Returns end-of-text token ID safely across tiktoken schemes."""
+        if hasattr(self.enc, "eot_token"):
+            return getattr(self.enc, "eot_token")
+        try:
+            return self.encode("<|endoftext|>")[0]
+        except Exception:
+            return 50256
+
     def decode(self, tokens: List[int], errors: str = "replace") -> str:
         """Decodes token IDs back to string, handling up to 200k extended vocabulary bounds."""
         valid_tokens = [int(t) for t in tokens if 0 <= int(t) < self.n_vocab]

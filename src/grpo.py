@@ -26,7 +26,11 @@ class GRPOTrainer:
         self.kl_beta = kl_beta
         
         if ref_model is None:
-            self.ref_model = copy.deepcopy(model).eval()
+            # Memory-Efficient Reference Model initialization: Offload ref_model to CPU to prevent 2x GPU VRAM duplication
+            try:
+                self.ref_model = copy.deepcopy(model).to("cpu").eval()
+            except Exception:
+                self.ref_model = copy.deepcopy(model).eval()
             for p in self.ref_model.parameters():
                 p.requires_grad = False
         else:

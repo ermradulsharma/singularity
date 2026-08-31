@@ -103,7 +103,8 @@ class ContinuousBatchScheduler:
             except Exception:
                 pass
 
-            if len(req.generated_tokens) >= req.max_new_tokens or next_token == self.tokenizer.eot_token:
+            eot_id = getattr(self.tokenizer, "eot_token", 50256)
+            if len(req.generated_tokens) >= req.max_new_tokens or next_token == eot_id:
                 req.is_finished = True
                 finished_reqs.append(req)
 

@@ -30,7 +30,8 @@ class RealtimeAudioVideoStreamer:
         return {"status": "ingested", "type": "video", "bytes": len(frame_bytes), "resolution": f"{width}x{height}"}
 
     async def process_full_duplex_speech_stream(self, raw_pcm_bytes: bytes) -> Optional[bytes]:
-        """Processes continuous incoming PCM speech bytes and returns synthesized speech response bytes."""
+        """Processes continuous incoming PCM speech bytes with jitter queue buffering and returns synthesized speech bytes."""
+        await self.ingest_audio_chunk(raw_pcm_bytes)
         latents = self.processor.process_incoming_bytes(raw_pcm_bytes)
         if latents is not None:
             return self.processor.synthesize_outgoing_bytes(latents)

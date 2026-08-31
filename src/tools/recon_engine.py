@@ -110,7 +110,8 @@ class UnrestrictedAgentReconEngine:
 
     @_retry_with_backoff(retries=2, backoff_in_seconds=2)
     def read_full_page(self, url: str, max_chars: int = 3000) -> str:
-        """Reads ANY webpage. Falls back to Wayback Machine on 404."""
+        """Reads ANY webpage with Playwright dynamic JS rendering fallback. Falls back to Wayback Machine on 404."""
+        text = ""
         try:
             req = urllib.request.Request(url, headers=self._get_headers())
             opener = self._get_opener()
@@ -118,13 +119,32 @@ class UnrestrictedAgentReconEngine:
                 html = response.read().decode('utf-8', errors='ignore')
                 
             text = self._clean_html(html)
-            if len(text) > max_chars:
-                return text[:max_chars] + f"\n... [Truncated: Total length {len(text)} chars]"
-            return text
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return self.search_wayback_machine(url, max_chars)
-            raise e
+            pass
+        except Exception:
+            pass
+
+        # Playwright Headless Browser fallback for dynamic Single Page Apps (React/Vue/JS-blocked)
+        if len(text) < 100 and PLAYWRIGHT_AVAILABLE:
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page()
+                    page.goto(url, timeout=10000)
+                    rendered_html = page.content()
+                    browser.close()
+                    text = self._clean_html(rendered_html)
+            except Exception:
+                pass
+
+        if not text:
+            return self.search_wayback_machine(url, max_chars)
+
+        if len(text) > max_chars:
+            return text[:max_chars] + f"\n... [Truncated: Total length {len(text)} chars]"
+        return text
 
     def search_wayback_machine(self, url: str, max_chars: int = 3000) -> str:
         """Fetches the last known archived version of a deleted/404 URL."""

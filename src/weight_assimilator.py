@@ -72,16 +72,23 @@ class SovereignWeightAssimilator:
         }
 
     def _project_tensor(self, src_tensor: torch.Tensor, target_shape: torch.Size, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        """Projects or crops source tensor to match target tensor shape for weight assimilation."""
+        """Projects source tensor to match target tensor shape using tensor interpolation to preserve weight orientation."""
         try:
-            curr = src_tensor.to(device, dtype=dtype)
-            for dim, (s_size, t_size) in enumerate(zip(curr.shape, target_shape)):
-                if s_size > t_size:
-                    curr = torch.narrow(curr, dim, 0, t_size)
-                elif s_size < t_size:
-                    pad_sizes = [0] * (2 * curr.ndim)
-                    pad_sizes[2 * (curr.ndim - 1 - dim) + 1] = t_size - s_size
-                    curr = torch.nn.functional.pad(curr, pad_sizes)
-            return curr if curr.shape == target_shape else None
+            curr = src_tensor.to(device, dtype=torch.float32)
+            if curr.ndim == 1:
+                # 1D embedding or norm bias vector interpolation
+                curr = curr.view(1, 1, -1)
+                resampled = torch.nn.functional.interpolate(curr, size=(target_shape[0],), mode='linear', align_corners=False)
+                return resampled.squeeze(0).squeeze(0).to(dtype)
+            elif curr.ndim == 2:
+                # 2D Linear weight matrix interpolation
+                curr = curr.unsqueeze(0).unsqueeze(0)
+                resampled = torch.nn.functional.interpolate(curr, size=tuple(target_shape), mode='bilinear', align_corners=False)
+                return resampled.squeeze(0).squeeze(0).to(dtype)
+            else:
+                for dim, (s_size, t_size) in enumerate(zip(curr.shape, target_shape)):
+                    if s_size > t_size:
+                        curr = torch.narrow(curr, dim, 0, t_size)
+                return curr.to(dtype) if curr.shape == target_shape else None
         except Exception:
             return None

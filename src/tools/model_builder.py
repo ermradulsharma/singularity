@@ -8,11 +8,15 @@ def generate_sub_brain(model_name: str, pytorch_code: str) -> str:
     
     try:
         tree = ast.parse(pytorch_code)
+        from src.sandbox import SafeASTVisitor
+        SafeASTVisitor().visit(tree)
         has_subbrain_class = any(isinstance(node, ast.ClassDef) and node.name == "SubBrain" for node in tree.body)
         if not has_subbrain_class:
             return "[ERROR] The provided PyTorch code must contain a 'class SubBrain(nn.Module):' definition."
     except SyntaxError as e:
         return f"[ERROR] Syntax error in the generated PyTorch code: {e}"
+    except Exception as se:
+        return f"[ERROR] Security check blocked sub-brain generation: {se}"
 
     sub_brains_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sub_brains")
     os.makedirs(sub_brains_dir, exist_ok=True)

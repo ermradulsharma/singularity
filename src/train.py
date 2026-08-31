@@ -26,15 +26,19 @@ class AGIDataset(Dataset):
             tokens = tokenizer.encode(prompt, add_special_tokens=True)
             
             eos_id = getattr(tokenizer, 'eos_token_id', 50256) or 50256
-            if len(tokens) > max_length:
-                tokens = tokens[:max_length]
-                labels = tokens[1:] + [-100]
+            if len(tokens) >= max_length:
+                seq_tokens = tokens[:max_length]
+                inp_tokens = seq_tokens[:-1]
+                lbl_tokens = seq_tokens[1:]
             else:
-                pad_len = max_length - len(tokens)
-                labels = tokens[1:] + [eos_id] + [-100] * (pad_len - 1)
-                tokens = tokens + [eos_id] * pad_len
-                
-            self.examples.append((torch.tensor(tokens[:-1], dtype=torch.long), torch.tensor(labels[:-1], dtype=torch.long)))
+                inp_tokens = tokens[:-1]
+                lbl_tokens = tokens[1:] + [eos_id]
+                pad_len = (max_length - 1) - len(inp_tokens)
+                if pad_len > 0:
+                    inp_tokens = inp_tokens + [eos_id] * pad_len
+                    lbl_tokens = lbl_tokens + [-100] * pad_len
+
+            self.examples.append((torch.tensor(inp_tokens, dtype=torch.long), torch.tensor(lbl_tokens, dtype=torch.long)))
 
     def __len__(self):
         return len(self.examples)

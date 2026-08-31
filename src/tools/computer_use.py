@@ -20,7 +20,7 @@ class OSComputerUseTool:
                 "status": "success",
                 "width": screenshot.width,
                 "height": screenshot.height,
-                "base64_image": img_b64[:100] + "..."
+                "base64_image": img_b64
             }
         except Exception as e:
             return {"status": "error", "message": f"Screen capture failed: {e}"}

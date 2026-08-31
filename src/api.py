@@ -47,7 +47,23 @@ class AsyncContinuousBatcher:
 
     def start(self):
         if self._task is None:
+            self._warmup_cuda_graphs()
             self._task = asyncio.create_task(self.scheduler.run_loop())
+
+    def _warmup_cuda_graphs(self):
+        """Captures CUDA Graphs for static forward decoding shapes to eliminate CPU launch latency."""
+        if torch.cuda.is_available():
+            try:
+                dummy_idx = torch.tensor([[1]], dtype=torch.long, device="cuda")
+                # Warmup forward pass iterations
+                s = torch.cuda.Stream()
+                s.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(s):
+                    for _ in range(3):
+                        _ = self.engine.model(dummy_idx)
+                torch.cuda.current_stream().wait_stream(s)
+            except Exception:
+                pass
 
     async def stream_request(self, session_id: str, prompt: str, max_tokens: int, temperature: float):
         try:

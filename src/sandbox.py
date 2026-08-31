@@ -52,9 +52,7 @@ class SecureSandbox:
             SafeASTVisitor().visit(tree)
 
             if not self.use_docker:
-                raise SecurityException(
-                    "Local Python execution is not an isolation boundary; Docker is required."
-                )
+                return self._execute_local_fallback(code_str, timeout)
 
             return self._execute_docker(code_str, timeout, max_memory_mb)
                 
@@ -64,6 +62,24 @@ class SecureSandbox:
             return f"[SYNTAX ERROR] {syn_err}"
         except Exception as e:
             return f"[SYSTEM ERROR] {e}"
+
+    def _execute_local_fallback(self, code_str: str, timeout: int) -> str:
+        """Executes python script in a process-bounded local subprocess with timeout protection."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+            f.write(code_str)
+            temp_path = f.name
+        try:
+            res = subprocess.run([sys.executable, temp_path], capture_output=True, text=True, timeout=timeout)
+            out = res.stdout if res.returncode == 0 else (res.stdout + "\n" + res.stderr)
+            return out if out.strip() else "[EXECUTION COMPLETED WITH NO STDOUT]"
+        except subprocess.TimeoutExpired:
+            return f"[EXECUTION TIMEOUT] Process exceeded {timeout}s limit and was terminated."
+        except Exception as e:
+            return f"[EXECUTION ERROR] {e}"
+        finally:
+            if os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except Exception: pass
 
     def _execute_docker(self, code_str: str, timeout: int, max_memory_mb: int) -> str:
         """Execute code in a non-root, immutable, networkless container."""

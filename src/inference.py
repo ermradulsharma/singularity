@@ -78,7 +78,7 @@ class ModelArgs:
         return args
 
 def remap_state_dict(raw_state_dict: dict) -> dict:
-    """Remaps standard HuggingFace / Llama checkpoint keys to internal GPTLanguageModel topology."""
+    """Remaps standard HuggingFace / Llama / Qwen / DeepSeek checkpoint keys to internal GPTLanguageModel topology."""
     remapped = {}
     key_mappings = {
         "model.embed_tokens.weight": "graph.tok_emb.weight",
@@ -100,6 +100,13 @@ def remap_state_dict(raw_state_dict: dict) -> dict:
                 "self_attn.k_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wk.weight",
                 "self_attn.v_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wv.weight",
                 "self_attn.o_proj.weight": f"graph.blocks.{layer_idx}.graph.attn.wo.weight",
+                "self_attn.kv_down.weight": f"graph.blocks.{layer_idx}.graph.attn.kv_down.weight",
+                "self_attn.kv_up_k.weight": f"graph.blocks.{layer_idx}.graph.attn.kv_up_k.weight",
+                "self_attn.kv_up_v.weight": f"graph.blocks.{layer_idx}.graph.attn.kv_up_v.weight",
+                "mlp.gate_proj.weight": f"graph.blocks.{layer_idx}.graph.ffn.0.weight",
+                "mlp.down_proj.weight": f"graph.blocks.{layer_idx}.graph.ffn.2.weight",
+                "block_sparse_moe.gate.weight": f"graph.blocks.{layer_idx}.graph.router.weight",
+                "shared_expert.gate_proj.weight": f"graph.blocks.{layer_idx}.graph.shared_expert.0.weight",
             }
             if rest in sub_map:
                 remapped[sub_map[rest]] = v
@@ -182,7 +189,11 @@ class AGIInferenceEngine:
 
         current_emb_vocab = self.model.graph['tok_emb'].weight.size(0)
         if current_emb_vocab < self.config.vocab_size:
-            padding = torch.zeros(self.config.vocab_size - current_emb_vocab, self.model.graph['tok_emb'].weight.size(1), device=self.model.graph['tok_emb'].weight.device, dtype=self.model.graph['tok_emb'].weight.dtype)
+            # Gaussian noise initialization for expanded vocabulary embeddings (prevents NaN loss crashes)
+            padding = torch.randn(
+                self.config.vocab_size - current_emb_vocab, self.model.graph['tok_emb'].weight.size(1),
+                device=self.model.graph['tok_emb'].weight.device, dtype=self.model.graph['tok_emb'].weight.dtype
+            ) * 0.02
             new_weight = torch.nn.Parameter(torch.cat([self.model.graph['tok_emb'].weight.data, padding], dim=0))
             self.model.graph['tok_emb'].weight = new_weight
             self.model.graph['lm_head'].weight = new_weight

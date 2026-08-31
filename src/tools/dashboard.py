@@ -12,15 +12,21 @@ def get_telemetry_summary() -> str:
         with open(filepath, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
-                    entries.append(json.loads(line))
+                    try:
+                        entries.append(json.loads(line.strip()))
+                    except Exception:
+                        pass
                     
         if not entries:
             return "No telemetry records logged yet."
             
         recent = entries[-5:]
-        summary_lines = [f"Total Logged Iterations: {len(entries)}"]
+        summary_lines = [f"Total Logged Events: {len(entries)}"]
         for e in recent:
-            summary_lines.append(f"Iteration {e.get('iteration')}: GRPO Loss = {e.get('grpo_loss', 0.0):.4f}, Mean Reward = {e.get('mean_reward', 0.0):.4f}")
+            module = e.get('module', 'SYS')
+            level = e.get('level', 'INFO')
+            msg = e.get('message', '')
+            summary_lines.append(f"[{level}][{module}]: {msg[:60]}")
             
         return " | ".join(summary_lines)
     except Exception as e:

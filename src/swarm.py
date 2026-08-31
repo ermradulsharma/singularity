@@ -96,24 +96,26 @@ def critic_agent_task(task_description: str, generation_results: dict, return_di
 def orchestrate_swarm(task_description: str, roles: list) -> dict:
     """
     SWARM INTELLIGENCE ORCHESTRATOR (ACTOR-CRITIC + TREE-OF-THOUGHT CONSENSUS)
-    Spawns clones to solve problems, scores trajectories with PRM, and evaluates them with a Critic.
+    Executes in-process thread pool sub-agents, scores trajectories with PRM, and evaluates them with a Critic.
     """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
     from src.prm import StepProcessRewardModel
     prm = StepProcessRewardModel()
     
-    manager = multiprocessing.Manager()
-    return_dict = manager.dict()
-    lock = manager.Lock()
-    jobs = []
+    return_dict = {}
+    lock = threading.Lock()
     
-    for role in roles:
-        p = multiprocessing.Process(target=sub_agent_task, args=(role, task_description, return_dict, lock))
-        p.daemon = True
-        jobs.append(p)
-        p.start()
-        
-    for p in jobs:
-        p.join()
+    with ThreadPoolExecutor(max_workers=max(1, len(roles))) as executor:
+        futures = [
+            executor.submit(sub_agent_task, role, task_description, return_dict, lock)
+            for role in roles
+        ]
+        for f in futures:
+            try:
+                f.result()
+            except Exception:
+                pass
         
     generation_results = dict(return_dict)
     
@@ -126,10 +128,10 @@ def orchestrate_swarm(task_description: str, roles: list) -> dict:
             
     generation_results["tot_trajectory_scores"] = tot_scores
     
-    critic_job = multiprocessing.Process(target=critic_agent_task, args=(task_description, generation_results, return_dict, lock))
-    critic_job.daemon = True
-    critic_job.start()
-    critic_job.join()
+    try:
+        critic_agent_task(task_description, generation_results, return_dict, lock)
+    except Exception:
+        pass
         
     return dict(return_dict)
 

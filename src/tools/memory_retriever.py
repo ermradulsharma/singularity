@@ -26,25 +26,30 @@ def _text_to_tensor(text: str, dim: int = 128) -> torch.Tensor:
         
     return tensor_vec.unsqueeze(0)
 
+from src.memory import VectorSemanticMemory
+
+_GLOBAL_SEMANTIC_MEMORY = None
+
+def _get_semantic_memory() -> VectorSemanticMemory:
+    global _GLOBAL_SEMANTIC_MEMORY
+    if _GLOBAL_SEMANTIC_MEMORY is None:
+        _GLOBAL_SEMANTIC_MEMORY = VectorSemanticMemory()
+    return _GLOBAL_SEMANTIC_MEMORY
+
 def store_in_memory(key_text: str, value_text: str):
     """Stores a concept (key) and its definition (value) into long-term memory."""
-    mem = IndependentNeuralMemory()
-    k = _text_to_tensor(key_text)
-    v = _text_to_tensor(value_text)
-    mem.add_experience(k, v)
+    mem = _get_semantic_memory()
+    combined_text = f"[{key_text}]: {value_text}"
+    mem.store_text(combined_text)
     return "Stored in Long-Term Memory successfully."
 
 def search_memory(query_text: str, top_k: int = 3) -> str:
-    """Searches the agent's long term KV memory using cosine similarity."""
-    mem = IndependentNeuralMemory()
-    if mem.keys is None:
-        return "Memory is currently empty."
-        
-    q = _text_to_tensor(query_text)
-    retrieved = mem.retrieve_context(q, top_k=top_k)
+    """Searches the agent's long term memory and returns actual text content passages."""
+    mem = _get_semantic_memory()
+    passages = mem.search_semantic(query_text, top_k=top_k)
     
-    if retrieved is None:
+    if not passages:
         return "No relevant memories found."
         
-    return f"Retrieved {retrieved.shape[1]} memory tensors successfully."
+    return " | ".join(passages)
 

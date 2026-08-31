@@ -59,15 +59,34 @@ class MCPServer:
         return tools_list
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Executes a registered tool by name with arguments and returns MCP content result."""
+        """Executes a registered tool by name with arguments and returns MCP content result with dynamic type coercion."""
         if name not in self.tool_registry:
             return {"isError": True, "content": [{"type": "text", "text": f"Tool '{name}' not found in MCP registry."}]}
         meta = self.tool_registry[name]
         try:
-            import importlib
+            import importlib, inspect
             mod = importlib.import_module(f"src.tools.{meta['module']}")
             func = getattr(mod, name)
-            res = func(**arguments)
+            
+            # Coerce argument types based on function signature inspection
+            coerced_args = {}
+            sig = inspect.signature(func)
+            for k, v in arguments.items():
+                if k in sig.parameters:
+                    param_type = sig.parameters[k].annotation
+                    if param_type == int and isinstance(v, str) and v.isdigit():
+                        coerced_args[k] = int(v)
+                    elif param_type == float and isinstance(v, str):
+                        try: coerced_args[k] = float(v)
+                        except ValueError: coerced_args[k] = v
+                    elif param_type == bool and isinstance(v, str):
+                        coerced_args[k] = v.lower() in ("true", "1", "yes")
+                    else:
+                        coerced_args[k] = v
+                else:
+                    coerced_args[k] = v
+
+            res = func(**coerced_args)
             return {"isError": False, "content": [{"type": "text", "text": str(res)}]}
         except Exception as e:
             return {"isError": True, "content": [{"type": "text", "text": f"MCP Tool Execution Error: {e}"}]}

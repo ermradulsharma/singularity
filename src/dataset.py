@@ -12,7 +12,7 @@ class InstructionDataset(Dataset):
     Professional Pipeline for Instruction Fine-Tuning
     Now augmented with Native Neuro-Symbolic Special Tokens.
     """
-    def __init__(self, hf_dataset_name, block_size, split="train"):
+    def __init__(self, hf_dataset_name, block_size, split="train", max_samples=None):
         self.block_size = block_size
         
         from src.tokenizer import get_unified_tokenizer
@@ -37,19 +37,17 @@ class InstructionDataset(Dataset):
         }
         self.inverse_map = {v: k for k, v in self.special_tokens_map.items()}
         
-        
         if hf_dataset_name.endswith('.jsonl'):
             import json
             dataset = []
             with open(hf_dataset_name, "r", encoding="utf-8") as f:
                 for line in f:
                     dataset.append(json.loads(line))
-            if split == "train":
-                dataset = dataset[:2500]
-            else:
-                dataset = dataset[2500:3000]
+            if max_samples:
+                dataset = dataset[:max_samples]
         else:
-            dataset = load_dataset(hf_dataset_name, split=f"{split}[:5000]")
+            split_expr = f"{split}[:{max_samples}]" if max_samples else split
+            dataset = load_dataset(hf_dataset_name, split=split_expr)
         
         self.data = []
         for row in dataset:

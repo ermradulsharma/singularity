@@ -85,15 +85,31 @@ class VectorSemanticMemory(IndependentNeuralMemory):
         self.text_records = []
 
     def _encode_text(self, text: str) -> torch.Tensor:
-        """Encodes text into a normalized d_model embedding vector."""
+        """Encodes text into a normalized subword n-gram feature vector without ASCII sum collisions."""
         vec = torch.zeros(1, self.emb_dim, dtype=torch.float32)
-        words = text.split()
-        if not words:
-            return F.normalize(vec, p=2, dim=-1)
+        clean_text = text.lower().strip()
+        if not clean_text:
+            return F.normalize(vec + 1e-5, p=2, dim=-1)
+
+        # Extract character n-grams (1-gram, 2-gram, 3-gram) for position-sensitive subword encoding
+        ngrams = []
+        words = clean_text.split()
         for w in words:
-            val = sum(ord(c) for c in w)
-            idx = val % self.emb_dim
-            vec[0, idx] += 1.0
+            ngrams.append(w)
+            for i in range(len(w)):
+                ngrams.append(w[i:i+2])
+                if i + 3 <= len(w):
+                    ngrams.append(w[i:i+3])
+
+        for pos, ng in enumerate(ngrams):
+            # Compute position-sensitive polynomial hash to distinguish anagrams like 'cat' vs 'act'
+            h_val = 0
+            for idx_c, char_code in enumerate(map(ord, ng)):
+                h_val = (h_val * 31 + char_code + idx_c) % 2147483647
+            idx = h_val % self.emb_dim
+            sign = 1.0 if (h_val % 2 == 0) else -1.0
+            vec[0, idx] += sign * (1.0 + 0.1 * (pos % 5))
+
         return F.normalize(vec, p=2, dim=-1)
 
     def store_text(self, text: str):

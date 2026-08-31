@@ -17,15 +17,16 @@ def extract_raw_weights(model_id: str):
     save_path = os.path.join(base_dir, "data", "raw_weights", model_dir_name)
     
     try:
-        snapshot_download(
+        download_path = snapshot_download(
             repo_id=model_id,
             local_dir=save_path,
             local_dir_use_symlinks=False,
             resume_download=True,
             ignore_patterns=["*.msgpack", "*.h5", "*.ot", "coreml/*", "onnx/*"]
         )
-    except Exception:
-        pass
+        return {"status": "success", "message": f"Successfully extracted weights to {download_path}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to extract raw weights for '{model_id}': {str(e)}"}
 
 if __name__ == "__main__":
     _check_dependencies()

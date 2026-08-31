@@ -537,6 +537,10 @@ class NativeEarlyFusionMultimodalEmbedder(nn.Module):
         self.speech_proj = InterleavedSpeechProjector(d_model=d_model, audio_dim=64)
         self.modality_marker_vision = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         self.modality_marker_audio = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.vision_start_marker = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.vision_end_marker = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.audio_start_marker = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.audio_end_marker = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
 
     def forward(self, idx: torch.Tensor, images: torch.Tensor = None, speech_features: torch.Tensor = None) -> torch.Tensor:
         B, T = idx.size()
@@ -544,10 +548,14 @@ class NativeEarlyFusionMultimodalEmbedder(nn.Module):
         multimodal_tokens = [x_text]
         if images is not None:
             v_embeds = self.vision_encoder(images) + self.modality_marker_vision
-            multimodal_tokens.append(v_embeds)
+            v_start = self.vision_start_marker.expand(B, -1, -1)
+            v_end = self.vision_end_marker.expand(B, -1, -1)
+            multimodal_tokens.extend([v_start, v_embeds, v_end])
         if speech_features is not None:
             a_embeds = self.speech_proj(speech_features) + self.modality_marker_audio
-            multimodal_tokens.append(a_embeds)
+            a_start = self.audio_start_marker.expand(B, -1, -1)
+            a_end = self.audio_end_marker.expand(B, -1, -1)
+            multimodal_tokens.extend([a_start, a_embeds, a_end])
         return torch.cat(multimodal_tokens, dim=1)
 
 
@@ -743,30 +751,46 @@ class GPTLanguageModel(nn.Module):
         """ 
         🚀 AGI Stateful Generation Loop (Standardized OpenAI JSON Schema + MCP Protocol + Infini-Attention) 🚀
         """
-        THOUGHT_ID = 50260
-        idx = idx[:, -self.block_size:]
-        
-        if agentic_mode and idx.size(1) < self.block_size:
-            idx = torch.cat((idx, torch.tensor([[THOUGHT_ID]], dtype=torch.long, device=idx.device)), dim=1)
-            
         from src.tool_router import ConstrainedStructuredToolRouter
         from src.tokenizer import get_unified_tokenizer
         router = ConstrainedStructuredToolRouter()
         tokenizer = get_unified_tokenizer()
+
+        # Dynamic Special Token ID Resolution
+        try:
+            t_ids = tokenizer.encode("<|thought|>")
+            thought_id = t_ids[0] if t_ids and t_ids[0] < self.vocab_size else min(50260, self.vocab_size - 1)
+        except Exception:
+            thought_id = min(50260, self.vocab_size - 1)
+
+        idx = idx[:, -self.block_size:]
+        
+        if agentic_mode and idx.size(1) < self.block_size:
+            idx = torch.cat((idx, torch.tensor([[thought_id]], dtype=torch.long, device=idx.device)), dim=1)
         
         past_key_values = None
         
         for step_idx in range(max_new_tokens):
             if past_key_values is not None and past_key_values[0][0].shape[2] > window_size:
+                # StreamingLLM Position-Preserving Attention Sink Eviction: Retain 4 initial sink tokens + recent active window tokens
                 new_pkv = []
+                sink_tokens = 4
+                recent_tokens = max(1, window_size - sink_tokens)
                 for k, v in past_key_values:
-                    new_pkv.append((
-                        torch.cat([k[:, :, :4, :], k[:, :, -(window_size-4):, :]], dim=2),
-                        torch.cat([v[:, :, :4, :], v[:, :, -(window_size-4):, :]], dim=2)
-                    ))
-                evicted_k = past_key_values[-1][0][:, :, 4:-(window_size-4), :].mean(dim=2)
-                evicted_v = past_key_values[-1][1][:, :, 4:-(window_size-4), :].mean(dim=2)
-                self.long_term_memory.add_experience(evicted_k.flatten(start_dim=1), evicted_v.flatten(start_dim=1))
+                    k_sink = k[:, :, :sink_tokens, :]
+                    v_sink = v[:, :, :sink_tokens, :]
+                    k_recent = k[:, :, -recent_tokens:, :]
+                    v_recent = v[:, :, -recent_tokens:, :]
+                    
+                    evicted_k_slice = k[:, :, sink_tokens:-recent_tokens, :]
+                    evicted_v_slice = v[:, :, sink_tokens:-recent_tokens, :]
+                    if evicted_k_slice.shape[2] > 0:
+                        # Store summary snapshot without mutating active KV tensors or corrupting direction vectors
+                        mem_k = evicted_k_slice.detach().flatten(start_dim=1)[:, :self.graph['tok_emb'].weight.size(1)]
+                        mem_v = evicted_v_slice.detach().flatten(start_dim=1)[:, :self.graph['tok_emb'].weight.size(1)]
+                        self.long_term_memory.add_experience(mem_k, mem_v)
+                        
+                    new_pkv.append((torch.cat([k_sink, k_recent], dim=2), torch.cat([v_sink, v_recent], dim=2)))
                 past_key_values = new_pkv
 
             next_idx = idx[:, -1:] if past_key_values is not None else idx

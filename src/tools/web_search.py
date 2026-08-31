@@ -27,6 +27,14 @@ def search_wikipedia(query: str, limit: int = 2) -> str:
         return f"Web search failed: {str(e)}"
 
 def search_web(query: str) -> str:
-    """Main search entrypoint for Swarm Agents"""
+    """Main multi-source web search entrypoint for Swarm Agents."""
+    try:
+        from src.tools.recon_engine import UnrestrictedAgentReconEngine
+        recon = UnrestrictedAgentReconEngine()
+        res = recon.autonomous_search(query)
+        if res and not res.startswith("No results"):
+            return res
+    except Exception:
+        pass
     return search_wikipedia(query)
 

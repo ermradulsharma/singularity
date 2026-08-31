@@ -18,16 +18,21 @@ class RealTimeStreamingVisualizer:
 
     @staticmethod
     def render_docker_execution_panel(code_str: str, docker_output: str):
-        """Renders a live visual execution panel showing code sent to Docker and stdout result."""
+        """Renders a live visual execution panel showing code sent to Docker and stdout result with responsive text-wrapping."""
+        import textwrap
         print("\n" + "┌" + "─" * 63 + "┐")
         print("│ 🐳 DOCKER SECURE SANDBOX CODE EXECUTION PANEL                │")
         print("├" + "─" * 63 + "┤")
         for line in code_str.strip().split("\n"):
-            print(f"│  > {line[:58]:<58} │")
+            wrapped = textwrap.wrap(line, width=58) or [""]
+            for sub_l in wrapped:
+                print(f"│  > {sub_l:<58} │")
         print("├" + "─" * 63 + "┤")
         print("│ ⚙️ EXECUTION RESULT & OBSERVATION (STDOUT):                   │")
         for line in docker_output.strip().split("\n"):
-            print(f"│  $ {line[:58]:<58} │")
+            wrapped = textwrap.wrap(line, width=58) or [""]
+            for sub_l in wrapped:
+                print(f"│  $ {sub_l:<58} │")
         print("└" + "─" * 63 + "┘\n")
 
     @staticmethod

@@ -1,20 +1,25 @@
 import os
 import ast
 
-def _validate_tool_syntax(code_str: str) -> bool:
+def _validate_tool_syntax(code_str: str) -> tuple[bool, str]:
     try:
-        ast.parse(code_str)
-        return True
-    except SyntaxError:
-        return False
+        tree = ast.parse(code_str)
+        from src.sandbox import SafeASTVisitor
+        SafeASTVisitor().visit(tree)
+        return True, "Valid"
+    except SyntaxError as syn:
+        return False, f"Syntax Error: {syn}"
+    except Exception as se:
+        return False, f"Security Violation: {se}"
 
 def synthesize_new_tool(tool_name: str, python_code: str) -> str:
     """Autonomously synthesizes, verifies, and saves a new Python tool module to src/tools for live AST assimilation."""
     if not tool_name.isidentifier():
         return "[ERROR] Invalid tool_name. Use snake_case identifier."
         
-    if not _validate_tool_syntax(python_code):
-        return "[ERROR] Tool synthesis failed: Syntax error in PyTorch/Python code."
+    is_valid, msg = _validate_tool_syntax(python_code)
+    if not is_valid:
+        return f"[ERROR] Tool synthesis blocked: {msg}"
         
     tools_dir = os.path.join(os.path.dirname(__file__))
     filepath = os.path.join(tools_dir, f"{tool_name}.py")
