@@ -1,4 +1,7 @@
+import os
+import sys
 from typing import Dict, Any
+
 
 def _check_dependencies() -> None:
     """Internal helper to ensure huggingface_hub is available."""

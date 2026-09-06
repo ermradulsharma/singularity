@@ -170,8 +170,9 @@ class AGIInferenceEngine:
         if enable_compile and hasattr(torch, "compile"):
             try:
                 self.model = torch.compile(self.model)
-            except Exception:
-                pass
+            except Exception as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "INFERENCE", f"torch.compile compilation skipped: {e}")
 
         weights_loaded = False
         loaded_brain = None
@@ -185,8 +186,9 @@ class AGIInferenceEngine:
                     weights_loaded = True
                     loaded_brain = brain_path
                     break
-                except Exception:
-                    pass
+                except Exception as e:
+                    from src.telemetry import logger
+                    logger.log("WARNING", "INFERENCE", f"Failed loading state dict from {brain_path}: {e}")
 
         current_emb_vocab = self.model.graph['tok_emb'].weight.size(0)
         if current_emb_vocab < self.config.vocab_size:

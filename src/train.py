@@ -381,9 +381,8 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
         logger.log("INFO", "GRPO_RL", f"[GRPO RL Step {step+1}/{num_steps}] Mean Reward: {mean_r.item():.4f} | Loss: {avg_loss.item():.4f}")
         
     save_path = "models/singularity_grpo_evolved.safetensors"
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    safetensors.torch.save_file(model.state_dict(), save_path)
-    logger.log("INFO", "GRPO_RL", f"[GRPO RL Engine] Checkpoint saved successfully -> {save_path}")
+    save_checkpoint_atomic(model.state_dict(), save_path)
+    logger.log("INFO", "GRPO_RL", f"[GRPO RL Engine] Checkpoint saved atomically -> {save_path}")
 
 if __name__ == "__main__":
     train_agi()

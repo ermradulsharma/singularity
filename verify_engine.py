@@ -1,7 +1,15 @@
 import sys
 import os
+import random
 import torch
 import traceback
+
+# Enforce deterministic evaluation reproducibility across hardware targets
+random.seed(42)
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
 from src.sandbox import SecureSandbox
 from src.model import GPTLanguageModel, PagedKVCacheManager, precompute_freqs_cis
 from src.inference import ModelArgs

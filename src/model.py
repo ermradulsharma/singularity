@@ -158,8 +158,9 @@ class FP8Linear(nn.Module):
                 if self.bias is not None:
                     res += self.bias
                 return res
-            except Exception:
-                pass
+            except Exception as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "MODEL", f"FP8 Linear optimized kernel fallback triggered: {e}")
         
         w_dequant = self.weight.to(x.dtype) * self.weight_scale.to(x.dtype)
         return F.linear(x, w_dequant, self.bias)

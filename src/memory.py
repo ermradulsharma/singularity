@@ -113,26 +113,39 @@ class VectorSemanticMemory(IndependentNeuralMemory):
         return F.normalize(vec, p=2, dim=-1)
 
     def store_text(self, text: str):
-        """Chunks and stores text with its semantic vector embedding."""
+        """Chunks and stores text with its semantic vector embedding and creation timestamp."""
+        import time
         if not text or not text.strip():
             return
         vec = self._encode_text(text)
         self.add_experience(vec, vec)
-        self.text_records.append(text[:512])
+        self.text_records.append({"text": text[:512], "timestamp": time.time()})
 
-    def search_semantic(self, query: str, top_k: int = 3) -> list[str]:
-        """Retrieves top-k most semantically relevant text passages for a given query."""
+    def search_semantic(self, query: str, top_k: int = 3, min_similarity: float = 0.75) -> list[str]:
+        """Retrieves top-k semantically relevant passages satisfying S_cos >= 0.75 with timestamp decay."""
+        import time
+        import math
         if not self.text_records or self.keys is None:
             return []
         q_vec = self._encode_text(query)
         sim = F.cosine_similarity(q_vec, self.keys, dim=1)
-        k = min(top_k, sim.size(0))
-        _, top_indices = torch.topk(sim, k=k)
-        results = []
-        for idx in top_indices.tolist():
-            if idx < len(self.text_records):
-                results.append(self.text_records[idx])
-        return results
+        
+        current_time = time.time()
+        decay_rate = 1e-6 # Light exponential time decay
+        
+        candidates = []
+        for idx in range(min(sim.size(0), len(self.text_records))):
+            score = sim[idx].item()
+            if score >= min_similarity:
+                rec = self.text_records[idx]
+                t_stamp = rec.get("timestamp", current_time) if isinstance(rec, dict) else current_time
+                time_decay = math.exp(-decay_rate * (current_time - t_stamp))
+                adjusted_score = score * time_decay
+                text_content = rec.get("text", str(rec)) if isinstance(rec, dict) else str(rec)
+                candidates.append((adjusted_score, text_content))
+                
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return [c[1] for c in candidates[:top_k]]
 
 
 

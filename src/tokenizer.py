@@ -22,7 +22,9 @@ class UnifiedTokenizer:
         for cand in candidates:
             try:
                 return tiktoken.get_encoding(cand)
-            except Exception:
+            except Exception as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "TOKENIZER", f"Encoding {cand} unavailable: {e}")
                 continue
         raise RuntimeError("Failed to load any tiktoken encoding scheme.")
 
@@ -30,7 +32,9 @@ class UnifiedTokenizer:
         """Encodes text to token IDs safely within 200k vocabulary space."""
         try:
             return self.enc.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
-        except Exception:
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "TOKENIZER", f"Special token encoding fallback triggered: {e}")
             return self.enc.encode(text)
 
     @property
@@ -40,7 +44,9 @@ class UnifiedTokenizer:
             return getattr(self.enc, "eot_token")
         try:
             return self.encode("<|endoftext|>")[0]
-        except Exception:
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "TOKENIZER", f"EOT token lookup fallback: {e}")
             return 50256
 
     def decode(self, tokens: List[int], errors: str = "replace") -> str:
@@ -48,7 +54,9 @@ class UnifiedTokenizer:
         valid_tokens = [int(t) for t in tokens if 0 <= int(t) < self.n_vocab]
         try:
             return self.enc.decode(valid_tokens, errors=errors)
-        except Exception:
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "TOKENIZER", f"Decode errors parameter fallback: {e}")
             return self.enc.decode(valid_tokens)
 
 def get_unified_tokenizer(encoding_name: str = "o200k_base", target_vocab_size: int = 200019) -> UnifiedTokenizer:

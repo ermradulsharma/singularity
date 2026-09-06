@@ -1,9 +1,10 @@
 import multiprocessing
 import time
 import asyncio
+from typing import Dict, Any, List
 from src.tools.recon_engine import UnrestrictedAgentReconEngine
 
-async def _async_agent_loop(role: str, task_description: str, session, router):
+async def _async_agent_loop(role: str, task_description: str, session: Any, router: Any) -> str:
     from src.inference import generate_text
     
     max_steps = 15
@@ -40,8 +41,6 @@ async def _async_agent_loop(role: str, task_description: str, session, router):
             
     return f"[{role}] Task terminated after {max_steps} steps to prevent infinite loops."
 
-from typing import Dict, Any, List
-
 def sub_agent_task(role: str, task_description: str, return_dict: Dict[str, Any], lock: Any) -> None:
     """Executes a sub-agent process with a specific persona/role using ReAct (Reasoning + Acting)"""
     from src.chat_session import SessionManager
@@ -63,7 +62,7 @@ Final Answer: Provide the mathematically/logically proven solution.
 NEVER assume a final answer without verifying it via Code first. If you get a [SANDBOX ERROR], analyze it, fix your code, and try again."""
     session.add_message("system", react_system_prompt)
     
-    enhanced_task = f"Past Long-Term Knowledge:\n{past_context}\n\nCurrent Task:\n{task_description}"
+    enhanced_task = f"Past Long-Term Knowledge:\n{past_context}\n\nCurrent Task:\n<user_input>\n{task_description}\n</user_input>"
     
     session.add_message("user", enhanced_task)
     
@@ -81,7 +80,7 @@ def critic_agent_task(task_description: str, generation_results: Dict[str, Any],
     """
     from src.inference import generate_text
     
-    evaluation_prompt = f"Task: {task_description}\n\nEvaluate the following agent responses and select the most mathematically/logically sound approach.\n"
+    evaluation_prompt = f"Task: <user_input>\n{task_description}\n</user_input>\n\nEvaluate the following agent responses and select the most mathematically/logically sound approach.\n"
     for role, result in generation_results.items():
         evaluation_prompt += f"\n--- {role} ---\n{result}\n"
         
@@ -130,6 +129,15 @@ def orchestrate_swarm(task_description: str, roles: List[str]) -> Dict[str, Any]
             tot_scores[role] = sum(scores) / max(1, len(scores))
             
     generation_results["tot_trajectory_scores"] = tot_scores
+    
+    # Elect the highest scoring trajectory as consensus winner
+    if tot_scores:
+        best_role = max(tot_scores, key=tot_scores.get)
+        return_dict["elected_candidate"] = {
+            "role": best_role,
+            "score": tot_scores[best_role],
+            "trajectory": generation_results.get(best_role, "")
+        }
     
     try:
         critic_agent_task(task_description, generation_results, return_dict, lock)

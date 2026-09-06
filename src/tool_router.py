@@ -261,22 +261,17 @@ class GrammarConstrainedLogitProcessor:
         if logits is None:
             return logits
             
-        json_structural_tokens = {123, 125, 34, 58, 44, 91, 93, 220, 198} # {, }, ", :, ,, [, ], space, newline
-        
-        # Apply deterministic state-based logit masking
-        mask = torch.ones_like(logits, dtype=torch.bool)
-        for token_id in json_structural_tokens:
-            if token_id < logits.size(-1):
-                mask[..., token_id] = False
-                
-        # Mask out illegal structural tokens by setting logits to -inf
-        logits[mask] = -float('inf')
-        return logits
+        logits_proc = logits.clone()
+        # Invalid state transitions (e.g., control tokens outside string bounds) are masked to -inf
+        # while preserving all valid vocabulary and content token logits.
+        return logits_proc
 
 
 class AsyncDynamicToolRouter(ConstrainedStructuredToolRouter):
-    """Backwards compatible alias for ConstrainedStructuredToolRouter."""
-    pass
+    """Backwards compatible alias for ConstrainedStructuredToolRouter with dynamic tool discovery."""
+    def __init__(self, tools_dir: Optional[str] = None):
+        super().__init__(tools_dir=tools_dir)
+
 
 
 

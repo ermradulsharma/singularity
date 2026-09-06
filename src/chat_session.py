@@ -28,11 +28,28 @@ class SessionManager:
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(self.history, f, indent=4)
 
-    def add_message(self, role: str, content: str):
-        """Adds a message to the conversation history (e.g., 'user', 'agent', 'observation')."""
-        self.history.append({"role": role, "content": content})
-        if len(self.history) > self.max_history:
+    def add_message(self, role: str, content: str, block_size: int = 1048576):
+        """Adds a message to history with structural user_input isolation and 90% block_size middle-context pruning."""
+        formatted_content = content
+        if role.lower() == "user" and not (content.startswith("<user_input>") and content.endswith("</user_input>")):
+            formatted_content = f"<user_input>\n{content}\n</user_input>"
+            
+        self.history.append({"role": role, "content": formatted_content})
+        
+        # Enforce 90% context budget middle-context pruning
+        max_allowed_tokens = int(0.90 * block_size)
+        total_tokens = sum(len(m["content"].split()) * 2 for m in self.history)
+        
+        if total_tokens > max_allowed_tokens and len(self.history) > 3:
+            # Preserve system context (index 0) and latest task instruction (index -1), prune middle context
+            system_msg = self.history[0]
+            latest_msg = self.history[-1]
+            middle_msgs = self.history[1:-1]
+            pruned_middle = middle_msgs[-(len(middle_msgs) // 2):]
+            self.history = [system_msg] + pruned_middle + [latest_msg]
+        elif len(self.history) > self.max_history:
             self.history = self.history[-self.max_history:]
+            
         self._save_history()
 
     def get_formatted_history(self) -> str:
