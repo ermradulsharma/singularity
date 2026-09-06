@@ -108,10 +108,6 @@ class RLAIFEngine:
         score1 = self.prm.score_trajectory(text1)
         score2 = self.prm.score_trajectory(text2)
         
-        # Enforce minimum reward margin filtering to discard ambiguous preference pairs
-        if abs(score1 - score2) < self.min_margin:
-            return None
-
         if score1 >= score2:
             chosen, rejected = cand1, cand2
         else:

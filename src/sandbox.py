@@ -152,7 +152,8 @@ class SecureSandbox:
                 run_res = subprocess.run([bin_path], capture_output=True, text=True, timeout=timeout)
                 if os.path.exists(bin_path):
                     os.remove(bin_path)
-                return run_res.stdout if run_res.returncode == 0 else run_res.stderr
+                out = run_res.stdout.strip() if run_res.returncode == 0 else run_res.stderr.strip()
+                return f"[{lang_clean.upper()} OUTPUT] {out}" if out else f"[{lang_clean.upper()} EXECUTION SUCCESS]"
             else:
                 image = "gcc:latest" if lang_clean in ["cpp", "c++"] else "rust:latest"
                 cmd = [

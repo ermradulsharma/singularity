@@ -19,7 +19,7 @@ class SovereignWeightAssimilator:
     Maps tensor keys from external single or multi-shard safetensors model checkpoints (LLaMA, Qwen, DeepSeek format)
     into the internal GPTLanguageModel parameter structure.
     """
-    def __init__(self, target_model: nn.Module) -> None:
+    def __init__(self, target_model: Union[nn.Module, None] = None) -> None:
         self.target_model = target_model
 
     def align_and_load_safetensors(self, safetensors_path: Union[str, List[str]]) -> dict:
@@ -28,6 +28,8 @@ class SovereignWeightAssimilator:
         singularity-00002.safetensors, ...), computes tensor key alignments, and safely copies matching tensor
         shapes into the target GPTLanguageModel.
         """
+        if self.target_model is None:
+            return {"status": "error", "message": "No target_model assigned for weight alignment."}
         shard_paths = []
         if isinstance(safetensors_path, list):
             shard_paths = [p for p in safetensors_path if os.path.exists(p)]

@@ -130,7 +130,7 @@ class StepProcessRewardModel(nn.Module):
                 t_tensor = torch.tensor([t_ids[:256]], dtype=torch.long, device=device)
                 neural_score = float(self.neural_encoder(t_tensor).item())
                 
-            combined_score = 0.3 * h_score + 0.3 * syntax_math_score + 0.4 * neural_score
+            combined_score = 0.35 * h_score + 0.35 * syntax_math_score + 0.30 * neural_score
             scores.append(max(0.0, min(1.0, combined_score)))
         return scores
 
