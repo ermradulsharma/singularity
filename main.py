@@ -139,6 +139,12 @@ def self_play_rl_loop() -> None:
         config.n_layer, config.block_size, config.num_experts, config.num_experts_per_tok
     ).to(device)
     
+    if os.path.exists("models/singularity-00001.safetensors"):
+        from src.weight_assimilator import SovereignWeightAssimilator
+        assimilator = SovereignWeightAssimilator(model)
+        load_res = assimilator.align_and_load_safetensors("models/singularity-00001.safetensors")
+        logger.log("INFO", "SYSTEM", f"Loaded initial weights from models/singularity-00001.safetensors: {load_res}")
+
     import copy
     ref_model = copy.deepcopy(model).to("cpu")
     ref_model.eval()
