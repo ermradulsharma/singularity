@@ -60,7 +60,20 @@ class DPOTrainer:
         
         chosen_rewards = self.beta * (policy_chosen_logps - ref_chosen_logps).detach()
         rejected_rewards = self.beta * (policy_rejected_logps - ref_rejected_logps).detach()
+        reward_margin = (chosen_rewards - rejected_rewards).mean().item()
         
+        # Enforce minimum step reward margin filtering (\Delta R > \epsilon) to discard ambiguous pairs
+        min_margin = 0.05
+        if abs(reward_margin) < min_margin:
+            from src.telemetry import logger
+            logger.log("WARNING", "DPO", f"Skipped DPO step: reward margin {reward_margin:.4f} below threshold {min_margin}")
+            return {
+                "dpo_loss": 0.0,
+                "chosen_reward": chosen_rewards.mean().item(),
+                "rejected_reward": rejected_rewards.mean().item(),
+                "reward_margin": reward_margin
+            }
+            
         self.optimizer.zero_grad()
         dpo_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -71,7 +84,7 @@ class DPOTrainer:
             "dpo_loss": dpo_loss.item(),
             "chosen_reward": chosen_rewards.mean().item(),
             "rejected_reward": rejected_rewards.mean().item(),
-            "reward_margin": (chosen_rewards - rejected_rewards).mean().item()
+            "reward_margin": reward_margin
         }
 
 class RLAIFEngine:

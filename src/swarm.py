@@ -58,7 +58,9 @@ def sub_agent_task(role: str, task_description: str, return_dict: Dict[str, Any]
     
     react_system_prompt = f"""You are a specialized Swarm Agent with the role: {role}.
 You operate in a strict ReAct (Reason + Act) loop. To solve the problem, you MUST follow this EXACT format:
-Thought: Detail your reasoning step-by-step. What do you need to calculate or verify?
+<think>
+Detail your reasoning step-by-step. What do you need to calculate or verify?
+</think>
 Code: Write python code inside a ```python block to calculate your thought. The code will execute in a secure sandbox.
 Observation: (Wait for the system to provide the output of your code).
 ... (Repeat until you solve the problem)

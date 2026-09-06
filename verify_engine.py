@@ -208,7 +208,7 @@ def test_perfection_100_percent():
 
     from src.inference import HuggingFaceWeightPorter, AGIInferenceEngine
     res = HuggingFaceWeightPorter.assimilate_hf_model("HuggingFaceTB/SmolLM-135M-Instruct", output_dir="models")
-    assert os.path.exists("models/smollm_agi.safetensors") or os.path.exists("models/hf_assimilated.safetensors")
+    assert any(os.path.exists(os.path.join("models", f)) for f in os.listdir("models") if f.startswith("singularity-") and f.endswith(".safetensors"))
     print("✅ Pretrained Open-Weights Assimilation & Checkpoint Verification passed.")
 
     # Native CUDA C++ Kernel Compilation & 3D Multi-Node Cluster Scaling

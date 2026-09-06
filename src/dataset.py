@@ -182,6 +182,16 @@ class MinHashLSHDeduplicator:
         self.seen_signatures.append(sig)
         return is_dup
 
+    def deduplicate_stream(self, docs: List[str]) -> List[str]:
+        """Filters fuzzy/near-duplicate document streams using MinHash LSH signatures."""
+        unique_docs = []
+        for doc in docs:
+            if not doc or not doc.strip():
+                continue
+            if not self.is_near_duplicate(doc):
+                unique_docs.append(doc)
+        return unique_docs or docs
+
 
 class DistributedBloomFilter:
     """

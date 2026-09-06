@@ -1,6 +1,9 @@
 import torch
 import tiktoken
 import sys
+import glob
+import re
+from typing import Optional, List, Dict, Tuple, Union
 from src.model import GPTLanguageModel
 
 import os
@@ -19,9 +22,10 @@ class ModelArgs:
     dropout = 0.0
     intermediate_size = 57344 # SwiGLU 3.5x Ratio
 
-    def __init__(self, scale: str = None):
-        if scale:
-            preset = self.get_preset_config(scale)
+    def __init__(self, scale: Optional[str] = None):
+        target_scale = scale or os.getenv("MODEL_SCALE")
+        if target_scale:
+            preset = self.get_preset_config(target_scale)
             for k, v in preset.__dict__.items():
                 setattr(self, k, v)
             return
@@ -30,8 +34,17 @@ class ModelArgs:
             try:
                 with open("models/config.json", "r") as f:
                     config = json.load(f)
+                loaded_n_embd = config.get("n_embd", self.n_embd)
+                # If 1T cluster parameters are detected without multi-node distributed env, fallback to micro
+                if loaded_n_embd > 2048 and os.getenv("WORLD_SIZE") is None:
+                    from src.telemetry import logger
+                    logger.log("WARNING", "CONFIG", f"Oversized n_embd={loaded_n_embd} detected on single-node execution. Clamping to micro preset for VRAM/RAM safety.")
+                    preset = self.get_preset_config("micro")
+                    for k, v in preset.__dict__.items():
+                        setattr(self, k, v)
+                    return
                 self.vocab_size = max(50263, config.get("vocab_size", self.vocab_size))
-                self.n_embd = config.get("n_embd", self.n_embd)
+                self.n_embd = loaded_n_embd
                 self.n_head = config.get("n_head", self.n_head)
                 self.n_kv_head = config.get("n_kv_head", self.n_kv_head)
                 self.n_layer = config.get("n_layer", self.n_layer)
@@ -39,34 +52,30 @@ class ModelArgs:
                 self.intermediate_size = config.get("intermediate_size", self.intermediate_size)
                 self.num_experts = config.get("num_experts", self.num_experts)
                 self.num_experts_per_tok = config.get("num_experts_per_tok", self.num_experts_per_tok)
+                return
             except Exception:
                 pass
-        elif os.path.exists("config/config.yaml"):
-            try:
-                import yaml
-                with open("config/config.yaml", "r") as f:
-                    cfg = yaml.safe_load(f)
-                if cfg and "model" in cfg:
-                    m = cfg["model"]
-                    self.vocab_size = m.get("vocab_size", self.vocab_size)
-                    self.n_embd = m.get("n_embd", self.n_embd)
-                    self.n_head = m.get("n_head", self.n_head)
-                    self.n_kv_head = m.get("n_kv_head", self.n_kv_head)
-                    self.n_layer = m.get("n_layer", self.n_layer)
-                    self.block_size = m.get("block_size", self.block_size)
-                    self.num_experts = m.get("num_experts", self.num_experts)
-                    self.num_experts_per_tok = m.get("num_experts_per_tok", self.num_experts_per_tok)
-            except Exception:
-                pass
-        else:
-            preset = self.get_preset_config("micro")
-            for k, v in preset.__dict__.items():
-                setattr(self, k, v)
+
+        # Fallback to micro preset for non-OOM single-node execution
+        preset = self.get_preset_config("micro")
+        for k, v in preset.__dict__.items():
+            setattr(self, k, v)
 
     @classmethod
     def get_preset_config(cls, scale: str = "1t"):
         """Returns preset configuration for micro, 1b, 8b, 70b, 671b, or 1t (Singularity Frontier 1 Trillion+) scale models."""
-        args = cls()
+        args = cls.__new__(cls)
+        args.vocab_size = 200019
+        args.n_embd = 16384
+        args.n_head = 128
+        args.n_kv_head = 16
+        args.n_layer = 128
+        args.block_size = 1048576
+        args.num_experts = 512
+        args.num_experts_per_tok = 8
+        args.dropout = 0.0
+        args.intermediate_size = 57344
+
         if scale == "micro":
             args.n_embd, args.n_head, args.n_kv_head, args.n_layer, args.block_size, args.num_experts = 128, 4, 2, 4, 1024, 2
         elif scale == "1b":
@@ -124,7 +133,20 @@ class AGIInferenceEngine:
     def __init__(self, enable_fp8: bool = False, enable_compile: bool = False, scale: str = None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        possible_brains = [
+        dynamic_brains = []
+        if os.path.exists("models"):
+            shard_groups = set()
+            for f in sorted(os.listdir("models")):
+                if f.endswith(".safetensors"):
+                    match = re.match(r"^(.+?)-\d{5}\.safetensors$", f)
+                    if match:
+                        shard_groups.add(os.path.join("models", f"{match.group(1)}-00001.safetensors"))
+                    else:
+                        shard_groups.add(os.path.join("models", f))
+            dynamic_brains = sorted(list(shard_groups))
+            
+        static_brains = [
+            "models/singularity-00001.safetensors",
             "models/singularity_grpo_evolved.safetensors",
             "models/singularity_1t_frontier.safetensors", 
             "models/hf_assimilated.safetensors",
@@ -135,6 +157,7 @@ class AGIInferenceEngine:
             "models/llama3_agi.safetensors", 
             "models/deepseek_agi.safetensors"
         ]
+        possible_brains = list(dict.fromkeys(dynamic_brains + static_brains))
         has_weights = any(os.path.exists(bp) for bp in possible_brains)
         
         if not has_weights and not scale:
@@ -305,37 +328,56 @@ class AGIInferenceEngine:
         # Rule 25: Adaptive Task-Based Sampling Dynamics
         is_deterministic_task = any(kw in formatted_prompt.lower() for kw in ["code", "python", "math", "calculate", "tool", "```"])
         temperature = 0.1 if is_deterministic_task else 0.7
+        top_p = 1.0 if is_deterministic_task else 0.95
+        
+        from src.tool_router import GrammarConstrainedLogitProcessor
+        logit_processor = GrammarConstrainedLogitProcessor()
         
         past_key_values = None
         generated_ids = []
         
         with torch.no_grad():
-            for _ in range(max_new_tokens):
-                input_idx = idx[:, -1:] if past_key_values is not None else idx
-                
-                logits, _, past_key_values = self.model(input_idx, use_cache=True, past_key_values=past_key_values)
-                logits = logits[:, -1, :]
-                
-                logits = logits / temperature
-                top_k = 50
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-                
-                probs = torch.nn.functional.softmax(logits, dim=-1)
-                idx_next = torch.multinomial(probs, num_samples=1)
-                idx_next = torch.clamp(idx_next, min=0, max=max_vocab_id)
-                
-                idx = torch.cat((idx, idx_next), dim=1)
-                generated_ids.append(idx_next.item())
-                
-                try:
-                    tok_text = self.enc.decode([idx_next.item()])
-                    RealTimeStreamingVisualizer.stream_thought_token(tok_text)
-                except (UnicodeDecodeError, KeyError, ValueError):
-                    pass
-                
-                if hasattr(self.enc, 'eos_token_id') and idx_next.item() == self.enc.eos_token_id:
-                    break
+            autocast_device = 'cuda' if 'cuda' in str(self.device) else 'cpu'
+            with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16):
+                for _ in range(max_new_tokens):
+                    input_idx = idx[:, -1:] if past_key_values is not None else idx
+                    
+                    logits, _, past_key_values = self.model(input_idx, use_cache=True, past_key_values=past_key_values)
+                    logits = logits[:, -1, :]
+                    
+                    # Apply grammar constrained logit processor for structured schema safety
+                    logits = logit_processor.process_logits(idx, logits)
+                    
+                    if is_deterministic_task or temperature <= 0.1:
+                        # Enforce greedy deterministic sampling
+                        idx_next = torch.argmax(logits, dim=-1, keepdim=True)
+                    else:
+                        logits = logits / temperature
+                        # Nucleus (Top-p) Sampling with Top-k filtering
+                        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                        cumulative_probs = torch.cumsum(torch.nn.functional.softmax(sorted_logits, dim=-1), dim=-1)
+                        sorted_indices_to_remove = cumulative_probs > top_p
+                        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                        sorted_indices_to_remove[..., 0] = 0
+                        indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                        logits[indices_to_remove] = -float('Inf')
+                        
+                        probs = torch.nn.functional.softmax(logits, dim=-1)
+                        idx_next = torch.multinomial(probs, num_samples=1)
+                        
+                    idx_next = torch.clamp(idx_next, min=0, max=max_vocab_id)
+                    
+                    idx = torch.cat((idx, idx_next), dim=1)
+                    generated_ids.append(idx_next.item())
+                    
+                    try:
+                        tok_text = self.enc.decode([idx_next.item()])
+                        RealTimeStreamingVisualizer.stream_thought_token(tok_text)
+                    except (UnicodeDecodeError, KeyError, ValueError):
+                        pass
+                    
+                    if hasattr(self.enc, 'eos_token_id') and idx_next.item() == self.enc.eos_token_id:
+                        break
                     
             try:
                 generated_text = self.enc.decode(generated_ids, skip_special_tokens=True)
@@ -415,7 +457,7 @@ class HuggingFaceWeightPorter:
     """HuggingFace & SOTA Model Weight Assimilation Porter into safetensors format."""
 
     @staticmethod
-    def synthesize_initial_pretrained_weights(save_path: str = "models/smollm_agi.safetensors") -> str:
+    def synthesize_initial_pretrained_weights(save_path: str = "models/singularity-00001.safetensors") -> str:
         """Synthesizes initialized baseline pretrained weights into safetensors format to ensure non-empty model boot."""
         try:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -434,7 +476,7 @@ class HuggingFaceWeightPorter:
     def assimilate_hf_model(repo_id: str, output_dir: str = "models") -> str:
         """Ingests a HuggingFace hub model repository and converts weights to local safetensors format."""
         os.makedirs(output_dir, exist_ok=True)
-        save_target = os.path.join(output_dir, "hf_assimilated.safetensors")
+        save_target = os.path.join(output_dir, "singularity-00001.safetensors")
         
         # 1. Try HuggingFace Hub snapshot download
         try:
@@ -467,7 +509,7 @@ class HuggingFaceWeightPorter:
             pass
 
         # 3. Fallback: Synthesize initialized weights so model never remains uninitialized
-        fallback_path = os.path.join(output_dir, "smollm_agi.safetensors")
+        fallback_path = os.path.join(output_dir, "singularity-00001.safetensors")
         return HuggingFaceWeightPorter.synthesize_initial_pretrained_weights(fallback_path)
 
 class CUDAGraphDecodeRunner:

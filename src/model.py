@@ -84,7 +84,7 @@ class TritonFusedKernels:
 
 class LoRALinear(nn.Module):
     """Low-Rank Adaptation (LoRA) layer for memory-efficient Neural Variants."""
-    def __init__(self, linear_layer: nn.Linear, r: int = 8, alpha: int = 16):
+    def __init__(self, linear_layer: nn.Linear, r: int = 8, alpha: int = 16) -> None:
         super().__init__()
         self.linear = linear_layer
         self.r = r
@@ -93,6 +93,12 @@ class LoRALinear(nn.Module):
         self.lora_B = nn.Parameter(torch.zeros(r, linear_layer.out_features))
         nn.init.normal_(self.lora_A, std=0.02)
         nn.init.zeros_(self.lora_B)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Applies linear projection plus low-rank LoRA delta (scaling * x @ lora_A @ lora_B)."""
+        base_out = self.linear(x)
+        lora_out = (x @ self.lora_A @ self.lora_B) * self.scaling
+        return base_out + lora_out
 
 class QuantizedLinear(nn.Module):
     """Memory-efficient FP8/INT4 blockwise quantized linear layer for 100% hardware acceleration."""

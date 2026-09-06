@@ -40,7 +40,7 @@ class OSComputerUseTool:
         except Exception as e:
             from src.telemetry import logger
             logger.log("WARNING", "COMPUTER_USE", f"Mouse click execution failed: {e}")
-            return {"status": "simulated", "action": "mouse_click", "x": x, "y": y, "button": button}
+            return {"status": "error", "message": f"Mouse click execution failed: {e}", "x": x, "y": y, "button": button}
 
     def execute_keyboard_type(self, text: str, interval: float = 0.05) -> Dict[str, Any]:
         """Types the specified text string into active desktop window with keypress interval timing."""
@@ -51,7 +51,7 @@ class OSComputerUseTool:
         except Exception as e:
             from src.telemetry import logger
             logger.log("WARNING", "COMPUTER_USE", f"Keyboard type execution failed: {e}")
-            return {"status": "simulated", "action": "keyboard_type", "chars_typed": len(text)}
+            return {"status": "error", "message": f"Keyboard type execution failed: {e}", "chars_typed": len(text)}
 
     def execute_key_combination(self, keys: List[str]) -> Dict[str, Any]:
         """Executes OS hotkey shortcuts by pressing multiple keys sequentially."""
@@ -62,4 +62,4 @@ class OSComputerUseTool:
         except Exception as e:
             from src.telemetry import logger
             logger.log("WARNING", "COMPUTER_USE", f"Hotkey execution failed: {e}")
-            return {"status": "simulated", "action": "hotkey", "keys": keys}
+            return {"status": "error", "message": f"Hotkey execution failed: {e}", "keys": keys}

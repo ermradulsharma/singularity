@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+from typing import Optional, List, Dict, Tuple, Union
 
 class ResidualVectorQuantizer(nn.Module):
     """Multi-Stage Residual Vector Quantizer (RVQ) for high-fidelity Mimi/EnCodec-grade acoustic tokenization."""
