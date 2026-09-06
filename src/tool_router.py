@@ -145,7 +145,7 @@ class ConstrainedStructuredToolRouter:
                 validated_payload = ToolCallPayload(**raw_json)
                 tasks.append(self._execute_validated_tool(validated_payload))
             except Exception as ve:
-                tasks.append(asyncio.to_thread(lambda: f"[VALIDATION ERROR] Tool schema invalid: {ve}"))
+                tasks.append(asyncio.to_thread(lambda err=ve: f"[VALIDATION ERROR] Tool schema invalid: {err}"))
 
         results = await asyncio.gather(*tasks)
         combined_observation = "\n\n".join(results)

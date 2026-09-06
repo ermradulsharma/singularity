@@ -151,7 +151,7 @@ def self_play_rl_loop() -> None:
         from src.weight_assimilator import SovereignWeightAssimilator
         assimilator = SovereignWeightAssimilator(model)
         load_res = assimilator.align_and_load_safetensors("models/singularity-00001.safetensors")
-        logger.log("INFO", "SYSTEM", f"Loaded initial weights from models/singularity-00001.safetensors: {load_res}")
+        logger.log("INFO", "SYSTEM", f"Loaded weights from models/singularity-00001.safetensors: {load_res}")
 
     import copy
     ref_model = copy.deepcopy(model).to("cpu")

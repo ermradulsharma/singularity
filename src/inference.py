@@ -138,24 +138,23 @@ class AGIInferenceEngine:
             shard_groups = set()
             for f in sorted(os.listdir("models")):
                 if f.endswith(".safetensors"):
-                    match = re.match(r"^(.+?)-\d{5}\.safetensors$", f)
-                    if match:
-                        shard_groups.add(os.path.join("models", f"{match.group(1)}-00001.safetensors"))
+                    m_hf = re.match(r"^(model)-\d{5}-of-\d{5}\.safetensors$", f)
+                    m_sing = re.match(r"^(.+?)-\d{5}\.safetensors$", f)
+                    if m_hf:
+                        shard_groups.add(os.path.join("models", f))
+                    elif m_sing:
+                        shard_groups.add(os.path.join("models", f"{m_sing.group(1)}-00001.safetensors"))
                     else:
                         shard_groups.add(os.path.join("models", f))
             dynamic_brains = sorted(list(shard_groups))
             
         static_brains = [
             "models/singularity-00001.safetensors",
+            "models/singularity_code_adapter.safetensors",
+            "models/singularity_reasoning_adapter.safetensors",
+            "models/singularity_language_adapter.safetensors",
             "models/singularity_grpo_evolved.safetensors",
-            "models/singularity_1t_frontier.safetensors", 
-            "models/hf_assimilated.safetensors",
-            "models/smollm_agi_evolved.safetensors",
-            "models/smollm_agi.safetensors", 
-            "models/tinyllama_agi.safetensors", 
-            "models/uncensored_agi.safetensors", 
-            "models/llama3_agi.safetensors", 
-            "models/deepseek_agi.safetensors"
+            "models/singularity_1t_frontier.safetensors"
         ]
         possible_brains = list(dict.fromkeys(dynamic_brains + static_brains))
         has_weights = any(os.path.exists(bp) for bp in possible_brains)

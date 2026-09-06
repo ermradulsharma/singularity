@@ -3,6 +3,7 @@ import re
 import hashlib
 import torch
 import numpy as np
+from typing import Dict, List, Set, Tuple, Optional
 from torch.utils.data import Dataset, IterableDataset
 from datasets import load_dataset
 import tiktoken

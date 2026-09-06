@@ -36,15 +36,22 @@ class SovereignWeightAssimilator:
                 shard_paths = [safetensors_path]
                 dirname = os.path.dirname(safetensors_path) or "."
                 basename = os.path.basename(safetensors_path)
-                match = re.match(r"^(.+?)-\d{5}\.safetensors$", basename)
-                if match:
-                    prefix = match.group(1)
-                    pattern = os.path.join(dirname, f"{prefix}-*.safetensors")
+                
+                if "of-" in basename and "model-" in basename:
+                    pattern = os.path.join(dirname, "model-*-of-*.safetensors")
                     found_shards = sorted(glob.glob(pattern))
-                    if len(found_shards) > 1:
+                    if found_shards:
                         shard_paths = found_shards
+                else:
+                    match = re.match(r"^(.+?)-\d{5}\.safetensors$", basename)
+                    if match:
+                        prefix = match.group(1)
+                        pattern = os.path.join(dirname, f"{prefix}-*.safetensors")
+                        found_shards = sorted(glob.glob(pattern))
+                        if len(found_shards) > 1:
+                            shard_paths = found_shards
             elif os.path.isdir(safetensors_path):
-                shard_paths = sorted(glob.glob(os.path.join(safetensors_path, "*.safetensors")))
+                shard_paths = sorted(glob.glob(os.path.join(safetensors_path, "**", "*.safetensors"), recursive=True))
 
         if not shard_paths:
             return {"status": "error", "message": f"No valid safetensors paths found for: {safetensors_path}"}
@@ -54,9 +61,12 @@ class SovereignWeightAssimilator:
         skipped_count = 0
 
         key_mapping = {
-            "model.embed_tokens.weight": "tok_emb.weight",
-            "lm_head.weight": "head.weight",
-            "model.norm.weight": "ln_f.weight"
+            "model.embed_tokens.weight": "graph.tok_emb.weight",
+            "model.language_model.embed_tokens.weight": "graph.tok_emb.weight",
+            "lm_head.weight": "graph.lm_head.weight",
+            "model.language_model.lm_head.weight": "graph.lm_head.weight",
+            "model.norm.weight": "graph.ln_f.weight",
+            "model.language_model.norm.weight": "graph.ln_f.weight"
         }
 
         with torch.no_grad():
@@ -69,6 +79,7 @@ class SovereignWeightAssimilator:
                     continue
 
                 for src_key, tensor in raw_weights.items():
+                    target_key = None
                     if src_key in state_dict:
                         target_key = src_key
                     elif ("graph." + src_key) in state_dict:
@@ -78,10 +89,25 @@ class SovereignWeightAssimilator:
                     else:
                         target_key = key_mapping.get(src_key, None)
                         if not target_key:
-                            if "model.layers." in src_key:
-                                target_key = src_key.replace("model.layers.", "blocks.").replace("self_attn.q_proj", "graph.attn.wq")
-                                target_key = target_key.replace("self_attn.k_proj", "graph.attn.wk").replace("self_attn.v_proj", "graph.attn.wv")
-                                target_key = target_key.replace("self_attn.o_proj", "graph.attn.wo").replace("mlp.gate_proj", "graph.ffn.0")
+                            clean_k = src_key
+                            if "model.language_model.layers." in clean_k:
+                                clean_k = clean_k.replace("model.language_model.layers.", "graph.blocks.")
+                            elif "model.layers." in clean_k:
+                                clean_k = clean_k.replace("model.layers.", "graph.blocks.")
+                            
+                            clean_k = clean_k.replace("self_attn.q_proj", "graph.attn.wq")
+                            clean_k = clean_k.replace("self_attn.k_proj", "graph.attn.wk")
+                            clean_k = clean_k.replace("self_attn.v_proj", "graph.attn.wv")
+                            clean_k = clean_k.replace("self_attn.o_proj", "graph.attn.wo")
+                            clean_k = clean_k.replace("mlp.gate_proj", "graph.ffn.0")
+                            clean_k = clean_k.replace("mlp.down_proj", "graph.ffn.2")
+                            clean_k = clean_k.replace("input_layernorm.weight", "graph.norm1.weight")
+                            clean_k = clean_k.replace("post_attention_layernorm.weight", "graph.norm2.weight")
+
+                            if clean_k in state_dict:
+                                target_key = clean_k
+                            elif ("graph." + clean_k) in state_dict:
+                                target_key = "graph." + clean_k
 
                     if target_key and target_key in state_dict:
                         target_param = state_dict[target_key]
@@ -107,6 +133,38 @@ class SovereignWeightAssimilator:
             "assimilated_tensors": assimilated_count,
             "skipped_tensors": skipped_count
         }
+
+    def fuse_all_sovereign_checkpoints_to_single_brain(self, models_dir: str = "models", output_save_path: str = "models/singularity-00001.safetensors") -> dict:
+        """
+        Single-Minded Knowledge Fusion.
+        Sequentially ingests and merges layer weights from all sovereign models (DeepSeek, Qwen, Llama, etc.)
+        present in models_dir into a single unified checkpoint file.
+        """
+        if not os.path.exists(models_dir):
+            return {"status": "error", "message": f"Models directory not found: {models_dir}"}
+        
+        all_files = [os.path.join(models_dir, f) for f in os.listdir(models_dir) if f.endswith(".safetensors") and not f.startswith("singularity-")]
+        if not all_files:
+            return {"status": "info", "message": "No external model files to fuse."}
+            
+        from src.telemetry import logger
+        logger.log("INFO", "ASSIMILATOR", f"Initiating Single-Minded Knowledge Fusion for {len(all_files)} external model files...")
+        
+        total_assimilated = 0
+        for model_file in all_files:
+            res = self.align_and_load_safetensors(model_file)
+            if res.get("status") == "success":
+                total_assimilated += res.get("assimilated_tensors", 0)
+                logger.log("INFO", "ASSIMILATOR", f"Fused weights from [ {os.path.basename(model_file)} ]: {res}")
+                
+        # Save unified single brain checkpoint
+        state_dict = {k: v.cpu().contiguous() for k, v in self.target_model.state_dict().items()}
+        tmp_path = output_save_path + ".tmp"
+        safetensors.torch.save_file(state_dict, tmp_path)
+        os.replace(tmp_path, output_save_path)
+        
+        logger.log("INFO", "ASSIMILATOR", f"Single-Minded Knowledge Fusion complete -> Saved to {output_save_path}")
+        return {"status": "success", "fused_tensors": total_assimilated, "unified_brain": output_save_path}
 
     def _project_tensor(self, src_tensor: torch.Tensor, target_shape: torch.Size, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         """Projects source tensor to match target tensor shape using tensor interpolation to preserve weight orientation."""
