@@ -19,7 +19,6 @@ def _telemetry_print(*args: Any, **kwargs: Any) -> None:
 
 builtins.print = _telemetry_print
 
-
 def assimilate_tools() -> str:
     """Scans the src/tools directory and dynamically builds an AST knowledge base of available tools and class methods."""
     tools_dir = os.path.join("src", "tools")
@@ -76,14 +75,23 @@ def generate_autonomous_training_data() -> Tuple[str, str]:
     recon = UnrestrictedAgentReconEngine()
     dedup = MinHashLSHDeduplicator(jaccard_threshold=0.8)
     
-    topic_prompt = "Generate a single string representing a highly complex, cutting-edge problem in computer science, physics, or mathematics. Output ONLY the string, no explanation."
+    curated_topics = [
+        "Quantum computing tensor networks and optimization algorithms",
+        "Autonomous AI agent swarm orchestration and reasoning verification",
+        "Distributed multi-GPU FSDP ZeRO-3 parameter sharding efficiency",
+        "High-performance C++ CUDA kernel optimization for transformer attention",
+        "DeepSeek-R1 GRPO reward model alignment and loss convergence"
+    ]
     try:
-        raw_topic = generate_text(topic_prompt).strip()
-        topic_clean = "".join(c for c in raw_topic if c.isprintable()).strip()
-        topic = topic_clean if len(topic_clean) > 3 else "Latest breakthroughs in autonomous AI reasoning"
+        raw_topic = generate_text("State a cutting-edge computer science topic in 5 words.").strip()
+        topic_clean = "".join(c for c in raw_topic if c.isalnum() or c in " -_").strip()
+        if len(topic_clean) > 8 and any(c.isalpha() for c in topic_clean) and not topic_clean.startswith("\ufffd"):
+            topic = topic_clean
+        else:
+            topic = random.choice(curated_topics)
     except Exception as e:
         logger.log("WARNING", "HARVESTER", f"Dynamic topic generation fallback: {e}")
-        topic = "Latest breakthroughs in autonomous AI reasoning"
+        topic = random.choice(curated_topics)
         
     logger.log("INFO", "HARVESTER", f"Selected Dynamic Topic: {topic}")
     

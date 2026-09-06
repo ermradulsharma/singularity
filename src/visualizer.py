@@ -14,9 +14,16 @@ class RealTimeStreamingVisualizer:
 
     @staticmethod
     def stream_thought_token(token: str) -> None:
-        """Streams inner monologue thoughts in real-time token by token."""
-        sys.stdout.write(token)
-        sys.stdout.flush()
+        """Streams inner monologue thoughts in real-time token by token with clean character filtering."""
+        if not token or token == "\ufffd":
+            return
+        clean_tok = "".join(c for c in token if c.isprintable() or c in "\n\t ")
+        if clean_tok:
+            try:
+                sys.stdout.write(clean_tok)
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     @staticmethod
     def render_docker_execution_panel(code_str: str, docker_output: str) -> None:

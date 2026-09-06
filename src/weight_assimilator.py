@@ -69,12 +69,19 @@ class SovereignWeightAssimilator:
                     continue
 
                 for src_key, tensor in raw_weights.items():
-                    target_key = key_mapping.get(src_key, None)
-                    if not target_key:
-                        if "model.layers." in src_key:
-                            target_key = src_key.replace("model.layers.", "blocks.").replace("self_attn.q_proj", "graph.attn.wq")
-                            target_key = target_key.replace("self_attn.k_proj", "graph.attn.wk").replace("self_attn.v_proj", "graph.attn.wv")
-                            target_key = target_key.replace("self_attn.o_proj", "graph.attn.wo").replace("mlp.gate_proj", "graph.ffn.0")
+                    if src_key in state_dict:
+                        target_key = src_key
+                    elif ("graph." + src_key) in state_dict:
+                        target_key = "graph." + src_key
+                    elif src_key.startswith("graph.") and src_key[6:] in state_dict:
+                        target_key = src_key[6:]
+                    else:
+                        target_key = key_mapping.get(src_key, None)
+                        if not target_key:
+                            if "model.layers." in src_key:
+                                target_key = src_key.replace("model.layers.", "blocks.").replace("self_attn.q_proj", "graph.attn.wq")
+                                target_key = target_key.replace("self_attn.k_proj", "graph.attn.wk").replace("self_attn.v_proj", "graph.attn.wv")
+                                target_key = target_key.replace("self_attn.o_proj", "graph.attn.wo").replace("mlp.gate_proj", "graph.ffn.0")
 
                     if target_key and target_key in state_dict:
                         target_param = state_dict[target_key]
