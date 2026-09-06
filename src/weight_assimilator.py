@@ -187,3 +187,5 @@ class SovereignWeightAssimilator:
                 return curr.to(dtype) if curr.shape == target_shape else None
         except Exception:
             return None
+
+WeightAssimilator = SovereignWeightAssimilator

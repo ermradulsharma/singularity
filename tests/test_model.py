@@ -85,7 +85,7 @@ def test_vectorized_moe_forward_pass():
     x = torch.randn(B, T, d)
     freqs_cis = torch.cat((torch.zeros(T, d // h // 2), torch.zeros(T, d // h // 2)), dim=-1)
     
-    out, _ = block(x, freqs_cis)
+    out, _, _ = block(x, freqs_cis)
     assert out.shape == (B, T, d), f"Expected shape {(B, T, d)}, got {out.shape}"
     assert not torch.isnan(out).any(), "Vectorized MoE output contains NaNs!"
 
@@ -98,7 +98,7 @@ def test_multi_head_latent_attention_mla():
     x = torch.randn(B, T, d)
     freqs_cis = torch.cat((torch.zeros(T, d // h // 2), torch.zeros(T, d // h // 2)), dim=-1)
     
-    out, _ = block(x, freqs_cis, use_mla=True)
+    out, _, _ = block(x, freqs_cis, use_mla=True)
     assert out.shape == (B, T, d), f"Expected MLA output shape {(B, T, d)}, got {out.shape}"
     assert not torch.isnan(out).any(), "MLA output contains NaNs!"
 

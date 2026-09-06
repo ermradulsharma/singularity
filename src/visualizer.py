@@ -29,7 +29,7 @@ class RealTimeStreamingVisualizer:
     def render_docker_execution_panel(code_str: str, docker_output: str) -> None:
         """Renders a live visual execution panel showing code sent to Docker and stdout result with responsive text-wrapping."""
         import textwrap
-        panel_log = f"Docker Exec Panel | Code: {code_str[:60]}... | Output: {docker_output[:60]}..."
+        panel_log = f"[DOCKER SECURE SANDBOX] Docker Exec Panel | Code: {code_str[:60]}... | Output: {docker_output[:60]}..."
         logger.log("INFO", "VISUALIZER", panel_log)
 
     @staticmethod

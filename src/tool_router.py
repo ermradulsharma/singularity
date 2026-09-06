@@ -271,10 +271,12 @@ class GrammarConstrainedLogitProcessor:
                 mask = torch.ones_like(logits_proc, dtype=torch.bool)
                 mask[..., 123] = False  # ASCII '{' token index
                 logits_proc = logits_proc.masked_fill(mask, -float('inf'))
+                logits_proc[..., 123] += 10.0
             elif self.state_tracker.state == JSONStateTracker.STATE_EXPECT_COLON:
                 mask = torch.ones_like(logits_proc, dtype=torch.bool)
                 mask[..., 58] = False   # ASCII ':' token index
                 logits_proc = logits_proc.masked_fill(mask, -float('inf'))
+                logits_proc[..., 58] += 10.0
         return logits_proc
 
 

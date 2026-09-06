@@ -108,12 +108,12 @@ class StepProcessRewardModel(nn.Module):
             
             # Heuristic & Formal Verification component
             h_score = 0.55
-            if "Error" in step_clean or "Exception" in step_clean or "Traceback" in step_clean:
-                h_score -= 0.4
             if "Thought:" in step_clean or "Observation:" in step_clean or "Code:" in step_clean or "<think>" in step_clean:
                 h_score += 0.2
             if "Final Answer:" in step_clean or "Therefore" in step_clean or "\\boxed" in step_clean:
                 h_score += 0.2
+            if "Error" in step_clean or "Exception" in step_clean or "Traceback" in step_clean:
+                h_score -= 0.6
             
             syntax_math_score = self._verify_math_and_syntax(step_clean)
 

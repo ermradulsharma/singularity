@@ -48,7 +48,7 @@ def test_moe_capacity_factor():
     """Verifies MoE expert capacity factor (C=1.2) token bounding."""
     block = UniversalDynamicBlock(d=64, h=4, kv=2, e=4, e_t=2)
     x = torch.randn(2, 16, 64)
-    freqs_cis = torch.randn(16, 16, 32)
+    freqs_cis = torch.randn(16, 16)
     out, pkv, aux_loss = block(x, freqs_cis)
     assert out.shape == (2, 16, 64), f"MoE output shape mismatch: {out.shape}"
     assert aux_loss >= 0.0, "MoE aux loss must be non-negative"

@@ -166,7 +166,7 @@ class SecureSandbox:
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout * 2)
                 return f"[DOCKER {lang_clean.upper()}] {res.stdout.strip() if res.returncode == 0 else res.stderr.strip()}"
         except Exception as e:
-            return f"[EXECUTION ERROR] Failed to compile and execute {lang}: {str(e)}"
+            return f"[{lang_clean.upper()} EXECUTION ERROR] Failed to compile and execute {lang}: {str(e)}"
         finally:
             if os.path.exists(src_path):
                 os.remove(src_path)

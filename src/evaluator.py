@@ -35,9 +35,9 @@ def evaluate_gsm8k_sample(pred_answer: str, ground_truth: str) -> float:
     gt_numbers = re.findall(r'-?\d+\.?\d*', gt_clean)
     
     if pred_numbers and gt_numbers:
-        # Compare exact final number matches to avoid substring false positives ("42" matching "420")
+        # Compare exact final number matches (0.8 for extracted numerical match, 1.0 for exact string match)
         if pred_numbers[-1] == gt_numbers[-1]:
-            return 1.0
+            return 0.8
             
     return 0.0
 

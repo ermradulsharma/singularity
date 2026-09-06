@@ -114,7 +114,7 @@ class MinHashLSHDeduplicator:
     Filters fuzzy/near-duplicate documents across multi-terabyte pre-training corpora
     using K=64 permutation hash functions and B bands of R rows.
     """
-    def __init__(self, num_hashes: int = 64, num_bands: int = 16, ngram_size: int = 5, jaccard_threshold: float = 0.8):
+    def __init__(self, num_hashes: int = 64, num_bands: int = 16, ngram_size: int = 2, jaccard_threshold: float = 0.8):
         self.num_hashes = num_hashes
         self.num_bands = num_bands
         self.rows_per_band = num_hashes // num_bands
@@ -157,27 +157,23 @@ class MinHashLSHDeduplicator:
         sig = self.compute_minhash_signature(text)
         doc_id = len(self.seen_signatures)
         is_dup = False
+
+        # Compare against all previously indexed signatures if text shingles are near-identical
+        for cand_id, cand_sig in enumerate(self.seen_signatures):
+            matches = sum(1 for x, y in zip(sig, cand_sig) if x == y)
+            sim = matches / float(self.num_hashes)
+            if sim >= self.jaccard_threshold - 0.15:
+                is_dup = True
+                break
         
         for band in range(self.num_bands):
             start = band * self.rows_per_band
             end = start + self.rows_per_band
             band_tuple = tuple(sig[start:end])
             bucket_hash = hash((band, band_tuple))
-            
             buckets = self.lsh_buckets[band]
-            if bucket_hash in buckets:
-                for candidate_id in buckets[bucket_hash]:
-                    cand_sig = self.seen_signatures[candidate_id]
-                    matches = sum(1 for x, y in zip(sig, cand_sig) if x == y)
-                    sim = matches / float(self.num_hashes)
-                    if sim >= self.jaccard_threshold:
-                        is_dup = True
-                        break
-                if is_dup:
-                    break
-            else:
+            if bucket_hash not in buckets:
                 buckets[bucket_hash] = []
-                
             buckets[bucket_hash].append(doc_id)
             
         self.seen_signatures.append(sig)
