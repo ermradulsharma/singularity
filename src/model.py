@@ -4,7 +4,7 @@ from torch.nn import functional as F
 import src.memory as memory
 import src.sandbox as secure_sandbox
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, scale_factor: float = 16.0, yarn_beta_fast: float = 32.0, yarn_beta_slow: float = 1.0):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, scale_factor: float = 16.0, yarn_beta_fast: float = 32.0, yarn_beta_slow: float = 1.0) -> torch.Tensor:
     """Precomputes YaRN (Yet another RoPE N-dimensional scaling) frequencies for 32k-128k context extrapolation."""
     scale = 1.0 / scale_factor
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)) * scale
@@ -12,7 +12,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, scale_facto
     freqs = torch.outer(t, freqs).float()
     return torch.cat((freqs, freqs), dim=-1)
 
-def precompute_freqs_cis_2d(dim: int, max_h: int = 64, max_w: int = 64, theta: float = 10000.0):
+def precompute_freqs_cis_2d(dim: int, max_h: int = 64, max_w: int = 64, theta: float = 10000.0) -> torch.Tensor:
     """Precomputes 2D Spatial Rotary Position Embeddings (2D RoPE) for vision tokens."""
     dim_h = dim // 2
     dim_w = dim // 2
@@ -25,7 +25,8 @@ def precompute_freqs_cis_2d(dim: int, max_h: int = 64, max_w: int = 64, theta: f
     freq_w = torch.outer(grid_w.flatten(), freqs_w)
     return torch.cat((freq_h, freq_h, freq_w, freq_w), dim=-1)
 
-def apply_rotary_emb(x, freqs_cis):
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """Applies rotary position embeddings to query/key tensor."""
     x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
     rotated = torch.cat((-x2, x1), dim=-1)
     cos, sin = freqs_cis.cos().view(1, x.shape[1], 1, -1), freqs_cis.sin().view(1, x.shape[1], 1, -1)
@@ -61,7 +62,7 @@ try:
         weight = tl.load(weight_ptr + cols, mask=mask, other=1.0).to(tl.float32)
         out = x * rsqrt * weight
         tl.store(out_ptr + row_idx * stride_x + cols, out, mask=mask)
-except Exception:
+except ImportError:
     pass
 
 class TritonFusedKernels:

@@ -134,13 +134,14 @@ class AGIInferenceEngine:
         has_weights = any(os.path.exists(bp) for bp in possible_brains)
         
         if not has_weights and not scale:
-            print("[SYSTEM] No local checkpoint found. Initiating Automatic HF Pretrained Weight Assimilation...")
+            from src.telemetry import logger
+            logger.log("INFO", "INFERENCE", "[SYSTEM] No local checkpoint found. Initiating Automatic HF Pretrained Weight Assimilation...")
             try:
                 res = HuggingFaceWeightPorter.assimilate_hf_model("HuggingFaceTB/SmolLM-135M-Instruct", output_dir="models")
-                print(res)
+                logger.log("INFO", "INFERENCE", str(res))
                 has_weights = any(os.path.exists(bp) for bp in possible_brains)
             except Exception as e:
-                print(f"[SYSTEM] Open weight assimilation deferred: {e}")
+                logger.log("WARNING", "INFERENCE", f"[SYSTEM] Open weight assimilation deferred: {e}")
         
         if scale:
             self.config = ModelArgs(scale=scale)
@@ -339,11 +340,16 @@ class AGIInferenceEngine:
             except Exception:
                 pass
 
+import threading
 _engine = None
+_ENGINE_LOCK = threading.Lock()
+
 def generate_text(prompt: str, variant: str = None) -> str:
     global _engine
     if _engine is None:
-        _engine = AGIInferenceEngine()
+        with _ENGINE_LOCK:
+            if _engine is None:
+                _engine = AGIInferenceEngine()
     if variant:
         _engine.load_variant(variant)
     return _engine.generate_response(prompt)

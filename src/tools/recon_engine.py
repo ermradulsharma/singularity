@@ -6,6 +6,7 @@ import re
 import random
 import time
 import functools
+from typing import List, Dict, Any, Optional, Tuple, Callable
 
 try:
     from playwright.sync_api import sync_playwright
@@ -222,14 +223,15 @@ class UnrestrictedAgentReconEngine:
         results = [f"[{repo['full_name']}]: {repo['description']} (URL: {repo['html_url']})" for repo in items]
         return " | ".join(results) if results else "No GitHub repos found."
 
-    def scan_ports(self, target_ip: str, ports: list = [21, 22, 80, 443, 3306, 8080]) -> str:
+    def scan_ports(self, target_ip: str, ports: Optional[List[int]] = None) -> str:
         """Executes a real TCP connect scan against the target IP."""
         import socket
         import concurrent.futures
         
+        target_ports = ports if ports is not None else [21, 22, 80, 443, 3306, 8080]
         open_ports = []
         
-        def scan_single_port(port):
+        def scan_single_port(port: int) -> None:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.5)
                 result = s.connect_ex((target_ip, port))
@@ -237,7 +239,7 @@ class UnrestrictedAgentReconEngine:
                     open_ports.append(port)
                     
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            executor.map(scan_single_port, ports)
+            executor.map(scan_single_port, target_ports)
             
         if open_ports:
             return f"Open ports found on {target_ip}: {sorted(open_ports)}"

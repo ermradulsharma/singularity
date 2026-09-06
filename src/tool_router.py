@@ -2,8 +2,12 @@ import re
 import json
 import asyncio
 import importlib
+import threading
+import torch
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, ValidationError
+
+_IMPORT_LOCK = threading.Lock()
 
 class ToolCallPayload(BaseModel):
     """Pydantic Schema for validated Tool Call Payloads."""
@@ -231,7 +235,8 @@ class JSONStateTracker:
     def __init__(self):
         self.state = self.STATE_EXPECT_OBJECT_START
 
-    def transition(self, char: str):
+    def transition(self, char: str) -> None:
+        """Transitions JSON syntax state machine based on char."""
         if self.state == self.STATE_EXPECT_OBJECT_START and char == '{':
             self.state = self.STATE_EXPECT_KEY
         elif self.state == self.STATE_EXPECT_KEY and char == '"':
@@ -252,17 +257,20 @@ class GrammarConstrainedLogitProcessor:
         self.state_tracker = JSONStateTracker()
 
     def process_logits(self, input_ids: Any, logits: Any) -> Any:
-        """Applies deterministic state-machine logit masking to guarantee valid JSON schema generation."""
+        """Applies deterministic state-machine logit masking (-inf on illegal tokens) to guarantee valid JSON schema generation."""
         if logits is None:
             return logits
             
-        json_structural_tokens = [123, 125, 34, 58, 44, 91, 93, 220, 198] # {, }, ", :, ,, [, ], space, newline
+        json_structural_tokens = {123, 125, 34, 58, 44, 91, 93, 220, 198} # {, }, ", :, ,, [, ], space, newline
         
-        # Apply deterministic state-based logit boosting
+        # Apply deterministic state-based logit masking
+        mask = torch.ones_like(logits, dtype=torch.bool)
         for token_id in json_structural_tokens:
             if token_id < logits.size(-1):
-                logits[..., token_id] += 5.0
+                mask[..., token_id] = False
                 
+        # Mask out illegal structural tokens by setting logits to -inf
+        logits[mask] = -float('inf')
         return logits
 
 

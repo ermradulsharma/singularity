@@ -3,7 +3,7 @@ import os
 import time
 import base64
 from io import BytesIO
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 
 class OSComputerUseTool:
     """Agentic OS GUI automation engine for screenshot capture, mouse navigation, and keyboard execution."""
@@ -23,6 +23,8 @@ class OSComputerUseTool:
                 "base64_image": img_b64
             }
         except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "COMPUTER_USE", f"Screen capture failed: {e}")
             return {"status": "error", "message": f"Screen capture failed: {e}"}
 
     def execute_mouse_click(self, x: int, y: int, button: str = "left", double: bool = False) -> Dict[str, Any]:
@@ -35,7 +37,9 @@ class OSComputerUseTool:
             else:
                 pyautogui.click(button=button)
             return {"status": "success", "action": "mouse_click", "x": x, "y": y, "button": button}
-        except Exception:
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "COMPUTER_USE", f"Mouse click execution failed: {e}")
             return {"status": "simulated", "action": "mouse_click", "x": x, "y": y, "button": button}
 
     def execute_keyboard_type(self, text: str, interval: float = 0.05) -> Dict[str, Any]:
@@ -44,14 +48,18 @@ class OSComputerUseTool:
             import pyautogui
             pyautogui.write(text, interval=interval)
             return {"status": "success", "action": "keyboard_type", "chars_typed": len(text)}
-        except Exception:
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "COMPUTER_USE", f"Keyboard type execution failed: {e}")
             return {"status": "simulated", "action": "keyboard_type", "chars_typed": len(text)}
 
-    def execute_key_combination(self, keys: list) -> Dict[str, Any]:
+    def execute_key_combination(self, keys: List[str]) -> Dict[str, Any]:
         """Executes OS hotkey shortcuts by pressing multiple keys sequentially."""
         try:
             import pyautogui
             pyautogui.hotkey(*keys)
             return {"status": "success", "action": "hotkey", "keys": keys}
-        except Exception:
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "COMPUTER_USE", f"Hotkey execution failed: {e}")
             return {"status": "simulated", "action": "hotkey", "keys": keys}

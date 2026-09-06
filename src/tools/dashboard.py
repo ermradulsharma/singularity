@@ -14,8 +14,8 @@ def get_telemetry_summary() -> str:
                 if line.strip():
                     try:
                         entries.append(json.loads(line.strip()))
-                    except Exception:
-                        pass
+                    except (json.JSONDecodeError, ValueError):
+                        continue
                     
         if not entries:
             return "No telemetry records logged yet."

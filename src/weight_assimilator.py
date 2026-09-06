@@ -15,7 +15,7 @@ class SovereignWeightAssimilator:
     Maps tensor keys from external safetensors model checkpoints (LLaMA, Qwen, DeepSeek format)
     into the internal GPTLanguageModel parameter structure.
     """
-    def __init__(self, target_model: nn.Module):
+    def __init__(self, target_model: nn.Module) -> None:
         self.target_model = target_model
 
     def align_and_load_safetensors(self, safetensors_path: str) -> dict:

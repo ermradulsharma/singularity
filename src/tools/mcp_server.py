@@ -5,6 +5,7 @@ import asyncio
 from typing import Dict, Any, List, Optional
 
 def _format_jsonrpc_response(request_id: Any, result: Any = None, error: Any = None) -> Dict[str, Any]:
+    """Formats JSON-RPC 2.0 response dictionary for MCP server requests."""
     response = {"jsonrpc": "2.0", "id": request_id}
     if error:
         response["error"] = error
@@ -22,6 +23,7 @@ class MCPServer:
         self._discover_tools()
 
     def _discover_tools(self) -> None:
+        """Autonomously scans the tools directory via AST parsing to populate the tool registry."""
         if not os.path.exists(self.tools_dir):
             return
         for filename in os.listdir(self.tools_dir):
@@ -40,8 +42,9 @@ class MCPServer:
                                 "description": doc.splitlines()[0],
                                 "parameters": params
                             }
-                except Exception:
-                    pass
+                except Exception as e:
+                    from src.telemetry import logger
+                    logger.log("WARNING", "MCP_SERVER", f"Failed to parse tool AST from {filename}: {e}")
 
     def list_tools(self) -> List[Dict[str, Any]]:
         """Lists all assimilated tools in standard MCP JSON-RPC tool schema format."""

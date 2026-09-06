@@ -1,7 +1,9 @@
 import ast
 import subprocess
 import os
+import sys
 import tempfile
+from typing import Dict, Any, Optional
 
 class SecurityException(Exception):
     pass
@@ -19,7 +21,7 @@ class SafeASTVisitor(ast.NodeVisitor):
         'Import', 'ImportFrom', 'alias'
     }
 
-    def generic_visit(self, node):
+    def generic_visit(self, node: ast.AST) -> None:
         node_type = type(node).__name__
         if node_type not in self.ALLOWED_NODES:
             raise SecurityException(f"Forbidden Code Structure Detected: {node_type}")
@@ -30,13 +32,13 @@ class SafeASTVisitor(ast.NodeVisitor):
         super().generic_visit(node)
 
 class SecureSandbox:
-    """Executes untrusted Python only inside a locked-down Docker container."""
+    """Executes untrusted Python and compiled languages securely inside a locked-down Docker container."""
 
-    def __init__(self, use_docker=True):
+    def __init__(self, use_docker: bool = True):
         self.use_docker = use_docker
 
-    def execute(self, code_str: str, env_dict: dict = None, timeout=5, max_memory_mb=128) -> str:
-        """Validate and execute untrusted code with OS-level isolation."""
+    def execute(self, code_str: str, env_dict: Optional[Dict[str, Any]] = None, timeout: int = 5, max_memory_mb: int = 128) -> str:
+        """Validate and execute untrusted Python code with OS-level isolation."""
         del env_dict
         try:
             if not isinstance(code_str, str) or not code_str.strip():
@@ -64,12 +66,17 @@ class SecureSandbox:
             return f"[SYSTEM ERROR] {e}"
 
     def _execute_local_fallback(self, code_str: str, timeout: int) -> str:
-        """Executes python script in a process-bounded local subprocess with timeout protection."""
+        """Executes python script in a process-bounded local subprocess with sanitized environment and timeout protection."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
             f.write(code_str)
             temp_path = f.name
         try:
-            res = subprocess.run([sys.executable, temp_path], capture_output=True, text=True, timeout=timeout)
+            clean_env = {
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": "",
+                "PYTHONUNBUFFERED": "1"
+            }
+            res = subprocess.run([sys.executable, "-I", temp_path], capture_output=True, text=True, timeout=timeout, env=clean_env)
             out = res.stdout if res.returncode == 0 else (res.stdout + "\n" + res.stderr)
             return out if out.strip() else "[EXECUTION COMPLETED WITH NO STDOUT]"
         except subprocess.TimeoutExpired:
@@ -122,10 +129,44 @@ class SecureSandbox:
                 os.remove(temp_script_path)
 
     def execute_compiled_lang(self, code_str: str, lang: str = "cpp", timeout: int = 5) -> str:
-        """Executes compiled languages (C++, Rust) in a locked-down Docker container for 100% execution parity."""
-        if lang.lower() not in ["cpp", "c++", "rust"]:
+        """Executes compiled languages (C++, Rust) in a locked-down Docker container with true compilation and execution."""
+        lang_clean = lang.lower()
+        if lang_clean not in ["cpp", "c++", "rust"]:
             return f"[ERROR] Unsupported language: {lang}"
-        return f"[DOCKER {lang.upper()}] Sandbox compiled execution pipeline ready for {lang}."
+            
+        ext = ".cpp" if lang_clean in ["cpp", "c++"] else ".rs"
+        with tempfile.NamedTemporaryFile(mode='w', suffix=ext, delete=False, encoding='utf-8') as f:
+            f.write(code_str)
+            src_path = f.name
+
+        try:
+            if not self.use_docker:
+                compiler = "g++" if lang_clean in ["cpp", "c++"] else "rustc"
+                bin_path = src_path + ".exe" if sys.platform == "win32" else src_path + ".bin"
+                compile_res = subprocess.run([compiler, src_path, "-o", bin_path], capture_output=True, text=True, timeout=timeout)
+                if compile_res.returncode != 0:
+                    return f"[COMPILATION ERROR] {compile_res.stderr.strip()}"
+                run_res = subprocess.run([bin_path], capture_output=True, text=True, timeout=timeout)
+                if os.path.exists(bin_path):
+                    os.remove(bin_path)
+                return run_res.stdout if run_res.returncode == 0 else run_res.stderr
+            else:
+                image = "gcc:latest" if lang_clean in ["cpp", "c++"] else "rust:latest"
+                cmd = [
+                    "docker", "run", "--rm",
+                    "--network=none",
+                    "-v", f"{src_path}:/app/src{ext}:ro",
+                    image,
+                    "sh", "-c",
+                    f"g++ /app/src{ext} -o /tmp/app.bin && /tmp/app.bin" if lang_clean in ["cpp", "c++"] else f"rustc /app/src{ext} -o /tmp/app.bin && /tmp/app.bin"
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout * 2)
+                return f"[DOCKER {lang_clean.upper()}] {res.stdout.strip() if res.returncode == 0 else res.stderr.strip()}"
+        except Exception as e:
+            return f"[EXECUTION ERROR] Failed to compile and execute {lang}: {str(e)}"
+        finally:
+            if os.path.exists(src_path):
+                os.remove(src_path)
 
 
 

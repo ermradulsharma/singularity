@@ -26,17 +26,22 @@ def _text_to_tensor(text: str, dim: int = 128) -> torch.Tensor:
         
     return tensor_vec.unsqueeze(0)
 
+import threading
 from src.memory import VectorSemanticMemory
 
 _GLOBAL_SEMANTIC_MEMORY = None
+_MEMORY_LOCK = threading.Lock()
 
 def _get_semantic_memory() -> VectorSemanticMemory:
+    """Thread-safe singleton accessor for global VectorSemanticMemory instance."""
     global _GLOBAL_SEMANTIC_MEMORY
     if _GLOBAL_SEMANTIC_MEMORY is None:
-        _GLOBAL_SEMANTIC_MEMORY = VectorSemanticMemory()
+        with _MEMORY_LOCK:
+            if _GLOBAL_SEMANTIC_MEMORY is None:
+                _GLOBAL_SEMANTIC_MEMORY = VectorSemanticMemory()
     return _GLOBAL_SEMANTIC_MEMORY
 
-def store_in_memory(key_text: str, value_text: str):
+def store_in_memory(key_text: str, value_text: str) -> str:
     """Stores a concept (key) and its definition (value) into long-term memory."""
     mem = _get_semantic_memory()
     combined_text = f"[{key_text}]: {value_text}"

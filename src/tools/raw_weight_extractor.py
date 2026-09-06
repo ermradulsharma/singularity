@@ -1,14 +1,13 @@
-import os
-import sys
+from typing import Dict, Any
 
-def _check_dependencies():
+def _check_dependencies() -> None:
     """Internal helper to ensure huggingface_hub is available."""
     try:
         import huggingface_hub
     except ImportError:
         sys.exit(1)
 
-def extract_raw_weights(model_id: str):
+def extract_raw_weights(model_id: str) -> Dict[str, Any]:
     """Autonomously downloads raw weights, configs, and datasets from HuggingFace without architecture translation."""
     from huggingface_hub import snapshot_download
     

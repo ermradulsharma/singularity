@@ -32,9 +32,8 @@ def search_web(query: str) -> str:
         from src.tools.recon_engine import UnrestrictedAgentReconEngine
         recon = UnrestrictedAgentReconEngine()
         res = recon.autonomous_search(query)
-        if res and not res.startswith("No results"):
-            return res
-    except Exception:
-        pass
+    except Exception as e:
+        from src.telemetry import logger
+        logger.log("WARNING", "WEB_SEARCH", f"Recon engine fallback triggered: {e}")
     return search_wikipedia(query)
 

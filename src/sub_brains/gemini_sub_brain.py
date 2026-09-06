@@ -3,7 +3,7 @@ import torch.nn as nn
 
 class SubBrain(nn.Module):
     """Dynamically gated neural sub-brain adapter with input-conditioned soft gating."""
-    def __init__(self, n_embd):
+    def __init__(self, n_embd: int) -> None:
         super().__init__()
         self.adapter = nn.Sequential(nn.Linear(n_embd, n_embd//4), nn.GELU(), nn.Linear(n_embd//4, n_embd))
         self.gate = nn.Linear(n_embd, 1)
@@ -11,6 +11,6 @@ class SubBrain(nn.Module):
         nn.init.zeros_(self.gate.weight)
         nn.init.constant_(self.gate.bias, -2.0)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         gating = torch.sigmoid(self.gate(x))
         return gating * self.adapter(x)

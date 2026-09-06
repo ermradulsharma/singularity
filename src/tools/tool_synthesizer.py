@@ -1,7 +1,9 @@
 import os
 import ast
+from typing import Tuple
 
-def _validate_tool_syntax(code_str: str) -> tuple[bool, str]:
+def _validate_tool_syntax(code_str: str) -> Tuple[bool, str]:
+    """Internal helper to parse and validate Python tool code against sandbox AST rules."""
     try:
         tree = ast.parse(code_str)
         from src.sandbox import SafeASTVisitor

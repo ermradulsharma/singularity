@@ -10,63 +10,86 @@ import torch.nn.functional as F
 from typing import Optional, Dict, Any
 
 class GPUArchitectureProfile:
-    """Detects active GPU compute capability and returns optimal Warp Tile sizes and Triton configurations."""
+    """Detects active hardware accelerator capability (NVIDIA CUDA, AMD ROCm, Apple Silicon MPS, CPU SIMD) and returns optimal tile sizes and tuning profiles."""
     
     @staticmethod
     def get_profile() -> Dict[str, Any]:
-        if not torch.cuda.is_available():
-            return {"arch": "CPU", "sm": 0, "warp_tile_m": 16, "warp_tile_n": 16, "num_warps": 4, "num_stages": 2}
-        
-        try:
-            cap = torch.cuda.get_device_capability()
-            sm_version = cap[0] * 10 + cap[1]
-        except Exception:
-            sm_version = 80
+        if torch.cuda.is_available():
+            try:
+                device_name = torch.cuda.get_device_name(0).lower()
+                if "rocm" in torch.__version__ or "hip" in device_name or hasattr(torch.version, "hip") and torch.version.hip is not None:
+                    return {"arch": "AMD_ROCM_HIP", "sm": 0, "warp_tile_m": 32, "warp_tile_n": 32, "num_warps": 8, "num_stages": 2, "block_size": 1024}
+                cap = torch.cuda.get_device_capability()
+                sm_version = cap[0] * 10 + cap[1]
+            except Exception:
+                sm_version = 80
+                device_name = ""
 
-        if sm_version >= 90:
-            # NVIDIA H100 / Hopper (SM 9.0+)
+            if sm_version >= 90:
+                # NVIDIA H100 / Hopper (SM 9.0+)
+                return {
+                    "arch": "NVIDIA_H100_HOPPER",
+                    "sm": sm_version,
+                    "warp_tile_m": 64,
+                    "warp_tile_n": 64,
+                    "warp_tile_k": 32,
+                    "num_warps": 16,
+                    "num_stages": 5,
+                    "block_size": 4096
+                }
+            elif sm_version >= 89:
+                # NVIDIA RTX 4090 / L40 / Ada Lovelace (SM 8.9)
+                return {
+                    "arch": "NVIDIA_RTX4090_ADA",
+                    "sm": sm_version,
+                    "warp_tile_m": 32,
+                    "warp_tile_n": 32,
+                    "warp_tile_k": 16,
+                    "num_warps": 4,
+                    "num_stages": 2,
+                    "block_size": 512
+                }
+            elif sm_version >= 80:
+                # NVIDIA A100 / Ampere (SM 8.0)
+                return {
+                    "arch": "NVIDIA_A100_AMPERE",
+                    "sm": sm_version,
+                    "warp_tile_m": 32,
+                    "warp_tile_n": 64,
+                    "warp_tile_k": 16,
+                    "num_warps": 8,
+                    "num_stages": 4,
+                    "block_size": 2048
+                }
+            else:
+                # Turing / Volta / Generic SM
+                return {
+                    "arch": "GENERIC_CUDA",
+                    "sm": sm_version,
+                    "warp_tile_m": 16,
+                    "warp_tile_n": 16,
+                    "warp_tile_k": 16,
+                    "num_warps": 4,
+                    "num_stages": 2,
+                    "block_size": 256
+                }
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return {
-                "arch": "NVIDIA_H100_HOPPER",
-                "sm": sm_version,
-                "warp_tile_m": 64,
-                "warp_tile_n": 64,
-                "warp_tile_k": 32,
-                "num_warps": 16,
-                "num_stages": 5,
-                "block_size": 4096
-            }
-        elif sm_version >= 89:
-            # NVIDIA RTX 4090 / L40 / Ada Lovelace (SM 8.9)
-            return {
-                "arch": "NVIDIA_RTX4090_ADA",
-                "sm": sm_version,
+                "arch": "APPLE_SILICON_MPS",
+                "sm": 0,
                 "warp_tile_m": 32,
                 "warp_tile_n": 32,
-                "warp_tile_k": 16,
                 "num_warps": 4,
                 "num_stages": 2,
-                "block_size": 512
-            }
-        elif sm_version >= 80:
-            # NVIDIA A100 / Ampere (SM 8.0)
-            return {
-                "arch": "NVIDIA_A100_AMPERE",
-                "sm": sm_version,
-                "warp_tile_m": 32,
-                "warp_tile_n": 64,
-                "warp_tile_k": 16,
-                "num_warps": 8,
-                "num_stages": 4,
-                "block_size": 2048
+                "block_size": 1024
             }
         else:
-            # Turing / Volta / Generic SM
+            cpu_simd = "CPU_AVX512" if torch.backends.cpu.get_cpu_capability() == "AVX512" else "CPU_SIMD"
             return {
-                "arch": "GENERIC_CUDA",
-                "sm": sm_version,
+                "arch": cpu_simd,
+                "sm": 0,
                 "warp_tile_m": 16,
                 "warp_tile_n": 16,
-                "warp_tile_k": 16,
                 "num_warps": 4,
                 "num_stages": 2,
                 "block_size": 256

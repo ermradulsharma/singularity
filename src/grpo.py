@@ -39,6 +39,7 @@ class GRPOTrainer:
                 p.requires_grad = False
                 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100, eta_min=lr * 0.1)
         self.prm = StepProcessRewardModel(vocab_size=model.vocab_size, d_model=model.graph['tok_emb'].weight.size(1)).to(self.device)
         self.verifier = DynamicExecutionVerifier()
         self.tokenizer = get_unified_tokenizer()
@@ -140,6 +141,7 @@ class GRPOTrainer:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.optimizer.step()
+        self.scheduler.step()
         
         return {
             "grpo_loss": loss.item(),

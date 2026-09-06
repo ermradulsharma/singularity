@@ -40,7 +40,9 @@ async def _async_agent_loop(role: str, task_description: str, session, router):
             
     return f"[{role}] Task terminated after {max_steps} steps to prevent infinite loops."
 
-def sub_agent_task(role: str, task_description: str, return_dict: dict, lock):
+from typing import Dict, Any, List
+
+def sub_agent_task(role: str, task_description: str, return_dict: Dict[str, Any], lock: Any) -> None:
     """Executes a sub-agent process with a specific persona/role using ReAct (Reasoning + Acting)"""
     from src.chat_session import SessionManager
     from src.tool_router import AsyncDynamicToolRouter
@@ -72,7 +74,7 @@ NEVER assume a final answer without verifying it via Code first. If you get a [S
     with lock:
         return_dict[role] = result
 
-def critic_agent_task(task_description: str, generation_results: dict, return_dict: dict, lock):
+def critic_agent_task(task_description: str, generation_results: Dict[str, Any], return_dict: Dict[str, Any], lock: Any) -> None:
     """
     CRITIC AGENT (LLM-AS-A-JUDGE)
     Uses the actual LLM to deeply evaluate the logic of the sub-agents and pick a winner.
@@ -93,7 +95,7 @@ def critic_agent_task(task_description: str, generation_results: dict, return_di
             "feedback": judge_response
         }
 
-def orchestrate_swarm(task_description: str, roles: list) -> dict:
+def orchestrate_swarm(task_description: str, roles: List[str]) -> Dict[str, Any]:
     """
     SWARM INTELLIGENCE ORCHESTRATOR (ACTOR-CRITIC + TREE-OF-THOUGHT CONSENSUS)
     Executes in-process thread pool sub-agents, scores trajectories with PRM, and evaluates them with a Critic.
@@ -101,6 +103,7 @@ def orchestrate_swarm(task_description: str, roles: list) -> dict:
     import threading
     from concurrent.futures import ThreadPoolExecutor
     from src.prm import StepProcessRewardModel
+    from src.telemetry import logger
     prm = StepProcessRewardModel()
     
     return_dict = {}
@@ -114,8 +117,8 @@ def orchestrate_swarm(task_description: str, roles: list) -> dict:
         for f in futures:
             try:
                 f.result()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.log("WARNING", "SWARM", f"Sub-agent task execution failed: {e}")
         
     generation_results = dict(return_dict)
     
@@ -130,8 +133,8 @@ def orchestrate_swarm(task_description: str, roles: list) -> dict:
     
     try:
         critic_agent_task(task_description, generation_results, return_dict, lock)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.log("WARNING", "SWARM", f"Critic evaluation task failed: {e}")
         
     return dict(return_dict)
 

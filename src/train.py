@@ -7,8 +7,18 @@ from torch.utils.data import Dataset, DataLoader
 from src.inference import ModelArgs, AGIInferenceEngine
 from src.model import GPTLanguageModel
 
+from typing import Dict, Any, Tuple, List, Optional
+from src.telemetry import logger
+
+def save_checkpoint_atomic(state_dict: dict, save_path: str) -> None:
+    """Atomically saves model state dictionary using .tmp write and os.replace execution."""
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    tmp_path = f"{save_path}.tmp"
+    safetensors.torch.save_file(state_dict, tmp_path)
+    os.replace(tmp_path, save_path)
+
 class AGIDataset(Dataset):
-    def __init__(self, data_path, tokenizer, max_length=512):
+    def __init__(self, data_path: str, tokenizer: Any, max_length: int = 512) -> None:
         self.examples = []
         
         with open(data_path, 'r', encoding='utf-8') as f:
@@ -40,15 +50,15 @@ class AGIDataset(Dataset):
 
             self.examples.append((torch.tensor(inp_tokens, dtype=torch.long), torch.tensor(lbl_tokens, dtype=torch.long)))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.examples)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.examples[idx]
 
 from src.distributed import cluster_manager
 
-def train_agi():
+def train_agi() -> None:
     cluster_manager.initialize_cluster()
     device = cluster_manager.device
     
@@ -58,7 +68,8 @@ def train_agi():
         tokenizer = engine.enc
         if cluster_manager.is_distributed:
             model = setup_fsdp_model(model, rank=cluster_manager.rank, world_size=cluster_manager.world_size)
-    except Exception:
+    except Exception as e:
+        logger.log("ERROR", "TRAIN", f"Failed to initialize AGI training: {e}")
         return
         
     model.train()
@@ -115,10 +126,11 @@ def train_agi():
                 break
                 
     save_path = "models/smollm_agi_evolved.safetensors"
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    safetensors.torch.save_file(model.state_dict(), save_path)
+    save_checkpoint_atomic(model.state_dict(), save_path)
+    from src.telemetry import logger
+    logger.log("INFO", "TRAIN", f"Model weights successfully saved atomically to {save_path}")
 
-def train_grpo_alignment(steps: int = 10):
+def train_grpo_alignment(steps: int = 10) -> None:
     """Executes DeepSeek-R1 style Group Relative Policy Optimization (GRPO) alignment training loop."""
     from src.grpo import GRPOTrainer
     engine = AGIInferenceEngine()
@@ -132,19 +144,18 @@ def train_grpo_alignment(steps: int = 10):
         "Explain Mixture-of-Experts (MoE) routing with mathematical formulation."
     ]
     
-    print("🚀 Starting GRPO Self-Play RL Alignment Training Loop...")
+    logger.log("INFO", "GRPO_ALIGNMENT", "🚀 Starting GRPO Self-Play RL Alignment Training Loop...")
     for step in range(steps):
         prompt_str = sample_prompts[step % len(sample_prompts)]
         prompt_tokens = torch.tensor([tokenizer.encode(prompt_str)], dtype=torch.long, device=trainer.device)
         metrics = trainer.train_step(prompt_tokens, max_gen_tokens=64)
-        print(f"Step {step+1}/{steps} | GRPO Loss: {metrics['grpo_loss']:.4f} | Reward: {metrics['mean_reward']:.4f} | KL: {metrics['kl_divergence']:.4f}")
+        logger.log("INFO", "GRPO_ALIGNMENT", f"Step {step+1}/{steps} | GRPO Loss: {metrics['grpo_loss']:.4f} | Reward: {metrics['mean_reward']:.4f} | KL: {metrics['kl_divergence']:.4f}")
         
     save_path = "models/smollm_agi_grpo_aligned.safetensors"
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    safetensors.torch.save_file(model.state_dict(), save_path)
-    print(f"✅ GRPO Aligned Model Weights successfully saved to {save_path}")
+    save_checkpoint_atomic(model.state_dict(), save_path)
+    logger.log("INFO", "GRPO_ALIGNMENT", f"✅ GRPO Aligned Model Weights successfully saved to {save_path}")
 
-def train_dpo_alignment(steps: int = 10):
+def train_dpo_alignment(steps: int = 10) -> None:
     """Executes Direct Preference Optimization (DPO) preference alignment training loop."""
     from src.dpo import DPOTrainer, RLAIFEngine
     engine = AGIInferenceEngine()
@@ -158,27 +169,26 @@ def train_dpo_alignment(steps: int = 10):
         "Explain Multi-Head Latent Attention (MLA) low-rank compression."
     ]
     
-    print("🚀 Starting Direct Preference Optimization (DPO) Alignment Loop...")
+    logger.log("INFO", "DPO_ALIGNMENT", "🚀 Starting Direct Preference Optimization (DPO) Alignment Loop...")
     for step in range(steps):
         prompt_str = sample_prompts[step % len(sample_prompts)]
         prompt_tokens = torch.tensor([tokenizer.encode(prompt_str)], dtype=torch.long, device=trainer.device)
-        chosen, rejected, chosen_m, rejected_m = rlaif.generate_preference_pair(prompt_tokens)
-        metrics = trainer.train_step(chosen, rejected, chosen_m, rejected_m)
-        print(f"Step {step+1}/{steps} | DPO Loss: {metrics['dpo_loss']:.4f} | Margin: {metrics['reward_margin']:.4f}")
+        pair = rlaif.generate_preference_pair(prompt_tokens)
+        if pair is not None:
+            chosen, rejected, chosen_m, rejected_m = pair
+            metrics = trainer.train_step(chosen, rejected, chosen_m, rejected_m)
+            logger.log("INFO", "DPO_ALIGNMENT", f"Step {step+1}/{steps} | DPO Loss: {metrics['dpo_loss']:.4f} | Margin: {metrics['reward_margin']:.4f}")
         
     save_path = "models/smollm_agi_dpo_aligned.safetensors"
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    safetensors.torch.save_file(model.state_dict(), save_path)
-    print(f"✅ DPO Aligned Model Weights successfully saved to {save_path}")
+    save_checkpoint_atomic(model.state_dict(), save_path)
+    logger.log("INFO", "DPO_ALIGNMENT", f"✅ DPO Aligned Model Weights successfully saved to {save_path}")
 
-def train_rlaif_alignment(steps: int = 10):
+def train_rlaif_alignment(steps: int = 10) -> None:
     """Executes Reinforcement Learning from AI Feedback (RLAIF) autonomous self-improvement alignment loop."""
-    print("🚀 Initiating RLAIF Autonomous AI-Feedback Self-Improvement Loop...")
+    logger.log("INFO", "RLAIF", "🚀 Initiating RLAIF Autonomous AI-Feedback Self-Improvement Loop...")
     train_grpo_alignment(steps=steps // 2)
     train_dpo_alignment(steps=steps // 2)
-    print("✅ RLAIF Multi-Stage Preference Alignment Successfully Completed!")
-
-
+    logger.log("INFO", "RLAIF", "✅ RLAIF Multi-Stage Preference Alignment Successfully Completed!")
 
 def generate_deepspeed_config(stage: int = 3, batch_size: int = 2) -> dict:
     """Generates DeepSpeed Stage 3 3D Parallelism configuration for multi-node cluster scaling."""
@@ -200,7 +210,7 @@ def generate_deepspeed_config(stage: int = 3, batch_size: int = 2) -> dict:
         "gradient_clipping": 1.0
     }
 
-def setup_fsdp_model(model: torch.nn.Module, rank: int = 0, world_size: int = 1):
+def setup_fsdp_model(model: torch.nn.Module, rank: int = 0, world_size: int = 1) -> torch.nn.Module:
     """Wraps PyTorch model in FSDP (Fully Sharded Data Parallel) with bfloat16 Mixed Precision & Transformer Wrap Policy."""
     if world_size > 1 and torch.cuda.is_available():
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision, CPUOffload
@@ -228,7 +238,7 @@ def setup_fsdp_model(model: torch.nn.Module, rank: int = 0, world_size: int = 1)
 class DistributedRolloutWorkerPool:
     """Industrial Async Multi-Worker Parallel Rollout Engine for DeepSeek-R1 GRPO Reinforcement Learning."""
 
-    def __init__(self, num_workers: int = 4):
+    def __init__(self, num_workers: int = 4) -> None:
         self.num_workers = num_workers
         from src.prm import StepProcessRewardModel
         self.prm = StepProcessRewardModel()
@@ -266,7 +276,7 @@ class DistributedRolloutWorkerPool:
         
         return {"rollouts": rollouts, "rewards": scores, "advantages": advantages.tolist()}
 
-def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.04, clip_eps: float = 0.2):
+def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.04, clip_eps: float = 0.2) -> None:
     """
     🚀 DeepSeek-R1 Style Group Relative Policy Optimization (GRPO) Reinforcement Learning Loop 🚀
     Samples G completion trajectories per prompt, evaluates multi-objective rewards (PRM + Format + Sandbox),
@@ -275,7 +285,7 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
     from src.inference import AGIInferenceEngine
     from src.prm import GroupRewardEvaluator, StepProcessRewardModel
     
-    print("[GRPO RL Engine] Initializing Async Group Relative Policy Optimization training loop...")
+    logger.log("INFO", "GRPO_RL", "[GRPO RL Engine] Initializing Async Group Relative Policy Optimization training loop...")
     engine = AGIInferenceEngine()
     model = engine.model
     model.train()
@@ -368,12 +378,12 @@ def train_grpo_rl(num_steps: int = 5, group_size: int = 4, kl_coeff: float = 0.0
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
         
-        print(f"[GRPO RL Step {step+1}/{num_steps}] Mean Reward: {mean_r.item():.4f} | Loss: {avg_loss.item():.4f}")
+        logger.log("INFO", "GRPO_RL", f"[GRPO RL Step {step+1}/{num_steps}] Mean Reward: {mean_r.item():.4f} | Loss: {avg_loss.item():.4f}")
         
     save_path = "models/singularity_grpo_evolved.safetensors"
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     safetensors.torch.save_file(model.state_dict(), save_path)
-    print(f"[GRPO RL Engine] Checkpoint saved successfully -> {save_path}")
+    logger.log("INFO", "GRPO_RL", f"[GRPO RL Engine] Checkpoint saved successfully -> {save_path}")
 
 if __name__ == "__main__":
     train_agi()

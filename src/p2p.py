@@ -2,6 +2,7 @@ import io
 import socket
 import torch
 import torch.nn as nn
+from typing import Dict, Any, Optional
 
 class P2PTensorShardNode(nn.Module):
     """Micro-Node Peer-to-Peer tensor sharding protocol for offloading matrix computations across network endpoints."""
@@ -20,11 +21,11 @@ class P2PTensorShardNode(nn.Module):
         return partial_output
 
     def send_tensor_over_socket(self, tensor: torch.Tensor, host: str, port: int) -> bool:
-        """Serializes and transmits tensor payload to remote P2P micro-node over TCP socket stream."""
+        """Serializes and transmits tensor payload to remote P2P micro-node over TCP socket stream using safetensors."""
         try:
-            buffer = io.BytesIO()
-            torch.save(tensor.detach().cpu(), buffer)
-            payload = buffer.getvalue()
+            import safetensors.torch
+            t_dict = {"tensor": tensor.detach().cpu()}
+            payload = safetensors.torch.save(t_dict)
             
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(5.0)
@@ -35,8 +36,8 @@ class P2PTensorShardNode(nn.Module):
             return False
 
     @staticmethod
-    def receive_tensor_from_socket(sock: socket.socket) -> torch.Tensor:
-        """Deserializes tensor payload received from TCP socket connection."""
+    def receive_tensor_from_socket(sock: socket.socket) -> Optional[torch.Tensor]:
+        """Deserializes tensor payload received from TCP socket connection using safetensors."""
         raw_size = sock.recv(8)
         if not raw_size:
             return None
@@ -47,10 +48,11 @@ class P2PTensorShardNode(nn.Module):
             if not packet:
                 break
             data.extend(packet)
-        buffer = io.BytesIO(data)
-        return torch.load(buffer, weights_only=True)
+        import safetensors.torch
+        t_dict = safetensors.torch.load(bytes(data))
+        return t_dict.get("tensor")
 
-    def get_node_status(self) -> dict:
+    def get_node_status(self) -> Dict[str, Any]:
         return {
             "node_id": self.node_id,
             "shard_rank": self.shard_rank,

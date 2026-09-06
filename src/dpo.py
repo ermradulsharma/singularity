@@ -31,6 +31,7 @@ class DPOTrainer:
                 p.requires_grad = False
                 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100, eta_min=lr * 0.1)
 
     def _get_batch_log_ps(self, model: GPTLanguageModel, tokens: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Computes sum of log probabilities over sequence tokens specified by mask."""
@@ -64,6 +65,7 @@ class DPOTrainer:
         dpo_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.optimizer.step()
+        self.scheduler.step()
         
         return {
             "dpo_loss": dpo_loss.item(),
@@ -74,13 +76,14 @@ class DPOTrainer:
 
 class RLAIFEngine:
     """RLAIF (Reinforcement Learning from AI Feedback) Autonomous Preference Pair Generator."""
-    def __init__(self, model: GPTLanguageModel):
+    def __init__(self, model: GPTLanguageModel, min_margin: float = 0.05):
         self.model = model
+        self.min_margin = min_margin
         self.prm = StepProcessRewardModel(vocab_size=model.vocab_size, d_model=model.graph['tok_emb'].weight.size(1)).to(model.graph['tok_emb'].weight.device)
         self.tokenizer = get_unified_tokenizer()
 
-    def generate_preference_pair(self, prompt_tokens: torch.Tensor, max_gen_tokens: int = 64) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Generates candidate completion pairs, scores via AI feedback judge (PRM + AST SMT), and outputs (chosen, rejected) token tensors."""
+    def generate_preference_pair(self, prompt_tokens: torch.Tensor, max_gen_tokens: int = 64) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        """Generates candidate completion pairs, scores via AI feedback judge (PRM + AST SMT), and outputs (chosen, rejected) token tensors if margin threshold is satisfied."""
         self.model.eval()
         with torch.no_grad():
             cand1 = self.model.generate(prompt_tokens, max_new_tokens=max_gen_tokens, temperature=0.9, agentic_mode=False)
@@ -92,6 +95,10 @@ class RLAIFEngine:
         score1 = self.prm.score_trajectory(text1)
         score2 = self.prm.score_trajectory(text2)
         
+        # Enforce minimum reward margin filtering to discard ambiguous preference pairs
+        if abs(score1 - score2) < self.min_margin:
+            return None
+
         if score1 >= score2:
             chosen, rejected = cand1, cand2
         else:
