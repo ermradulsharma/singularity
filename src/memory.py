@@ -33,14 +33,15 @@ class IndependentNeuralMemory:
         if self.keys is not None and self.values is not None:
             try:
                 state_dict = {
-                    'keys': self.keys.contiguous(),
-                    'values': self.values.contiguous()
+                    'keys': self.keys.detach().clone().contiguous(),
+                    'values': self.values.detach().clone().contiguous()
                 }
                 tmp_file = self.memory_file + ".tmp"
                 safetensors.torch.save_file(state_dict, tmp_file)
                 os.replace(tmp_file, self.memory_file)
-            except Exception:
-                pass
+            except (OSError, IOError, RuntimeError) as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "MEMORY", f"Failed to save neural memory atomically: {e}")
             
     def add_experience(self, key_tensor: torch.Tensor, value_tensor: torch.Tensor):
         """Adds a new thought/experience to long-term memory."""

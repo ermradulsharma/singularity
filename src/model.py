@@ -747,9 +747,11 @@ class GPTLanguageModel(nn.Module):
         from src.tokenizer import get_unified_tokenizer
         try:
             enc = get_unified_tokenizer()
-        except Exception:
+        except (ImportError, RuntimeError, AttributeError) as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "MODEL", f"Tokenizer resolution failed during MCTS scoring: {e}")
             enc = None
-            
+
         for cand in candidates:
             if enc and cand.ndim > 1:
                 text = enc.decode([t for t in cand[0].tolist() if t < enc.n_vocab])
@@ -777,7 +779,9 @@ class GPTLanguageModel(nn.Module):
         try:
             t_ids = tokenizer.encode("<|thought|>")
             thought_id = t_ids[0] if t_ids and t_ids[0] < self.vocab_size else min(50260, self.vocab_size - 1)
-        except Exception:
+        except (AttributeError, ValueError, IndexError) as e:
+            from src.telemetry import logger
+            logger.log("DEBUG", "MODEL", f"Defaulting thought_id resolution: {e}")
             thought_id = min(50260, self.vocab_size - 1)
 
         idx = idx[:, -self.block_size:]

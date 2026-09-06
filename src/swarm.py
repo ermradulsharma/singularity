@@ -1,13 +1,14 @@
+import threading
 import multiprocessing
 import time
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from src.tools.recon_engine import UnrestrictedAgentReconEngine
 
 async def _async_agent_loop(role: str, task_description: str, session: Any, router: Any) -> str:
     from src.inference import generate_text
     
-    max_steps = 15
+    max_steps = 3
     for step in range(max_steps):
         prompt_context = session.get_formatted_history()
         llm_response = generate_text(prompt_context, variant=role)
@@ -26,8 +27,12 @@ async def _async_agent_loop(role: str, task_description: str, session: Any, rout
                 try:
                     out = sandbox.execute(code_blocks[0])
                     sandbox_output = "\n[SANDBOX EXECUTION RESULT]\n" + out
-                except Exception as e:
+                except (RuntimeError, ValueError, TimeoutError) as e:
                     sandbox_output = f"\n[SANDBOX ERROR]\n{e}\nAnalyze the error, correct your code, and try again."
+                except Exception as e:
+                    from src.telemetry import logger
+                    logger.log("WARNING", "SWARM_SANDBOX", f"Unexpected sandbox execution error: {e}")
+                    sandbox_output = f"\n[SANDBOX ERROR]\n{e}"
         
         if tool_result["tool_called"] or sandbox_output:
             observation = tool_result.get("observation", "") + sandbox_output
@@ -39,9 +44,9 @@ async def _async_agent_loop(role: str, task_description: str, session: Any, rout
             result = f"[{role}] {llm_response}"
             return result
             
-    return f"[{role}] Task terminated after {max_steps} steps to prevent infinite loops."
+    return f"[{role}] Task terminated after {max_steps} steps to enforce N <= 3 trial bounds."
 
-def sub_agent_task(role: str, task_description: str, return_dict: Dict[str, Any], lock: Any) -> None:
+def sub_agent_task(role: str, task_description: str, return_dict: Dict[str, Any], lock: threading.Lock) -> None:
     """Executes a sub-agent process with a specific persona/role using ReAct (Reasoning + Acting)"""
     from src.chat_session import SessionManager
     from src.tool_router import AsyncDynamicToolRouter
@@ -73,7 +78,7 @@ NEVER assume a final answer without verifying it via Code first. If you get a [S
     with lock:
         return_dict[role] = result
 
-def critic_agent_task(task_description: str, generation_results: Dict[str, Any], return_dict: Dict[str, Any], lock: Any) -> None:
+def critic_agent_task(task_description: str, generation_results: Dict[str, Any], return_dict: Dict[str, Any], lock: threading.Lock) -> None:
     """
     CRITIC AGENT (LLM-AS-A-JUDGE)
     Uses the actual LLM to deeply evaluate the logic of the sub-agents and pick a winner.

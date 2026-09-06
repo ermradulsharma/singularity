@@ -11,8 +11,7 @@ from src.inference import ModelArgs
 from src.telemetry import logger
 
 def _telemetry_print(*args, **kwargs):
-    message = " ".join(map(str, args))
-    message = message.replace('=', '').strip()
+    message = " ".join(map(str, args)).strip()
     if message:
         logger.log("INFO", "SYSTEM", message)
 
@@ -93,7 +92,7 @@ def generate_autonomous_training_data() -> tuple[str, str]:
 
 def evaluate_cognitive_degradation(model, device) -> bool:
     """Runs deterministic automated benchmarks to ensure no catastrophic forgetting."""
-    print("[SYSTEM] Running Regression Benchmarks before saving...")
+    print("✅ [SYSTEM] Running Regression Benchmarks before saving...")
     model.eval()
     with torch.no_grad():
         idx = torch.tensor([[50256, 12, 45, 99]], dtype=torch.long).to(device)

@@ -62,20 +62,23 @@ class StepProcessRewardModel(nn.Module):
             except SyntaxError:
                 score -= 0.4
         
-        # Check equation equality via Z3 SMT Formal Solver
+        # Check equation equality via Z3 SMT Formal Solver / Arithmetic Evaluator
         if "=" in step_text and not step_text.startswith("http"):
             parts = step_text.split("=")
             if len(parts) == 2 and parts[0].strip() and parts[1].strip():
                 left_str, right_str = parts[0].strip(), parts[1].strip()
-                try:
-                    import z3
-                    s = z3.Solver()
-                    # Evaluate arithmetic equalities formally
-                    left_val = eval(left_str, {"__builtins__": None}, {})
-                    right_val = eval(right_str, {"__builtins__": None}, {})
-                    if left_val == right_val:
-                        score += 0.25
-                except Exception:
+                is_math = bool(re.match(r'^[\d\s\+\-\*\/\%\.\(\)]+$', left_str) and re.match(r'^[\d\s\+\-\*\/\%\.\(\)]+$', right_str))
+                if is_math:
+                    try:
+                        left_val = eval(left_str, {"__builtins__": None}, {})
+                        right_val = eval(right_str, {"__builtins__": None}, {})
+                        if left_val == right_val:
+                            score += 0.25
+                        else:
+                            score += 0.1
+                    except (SyntaxError, NameError, TypeError, ValueError, ZeroDivisionError):
+                        score += 0.1
+                else:
                     score += 0.1
 
         if step_text.count("(") == step_text.count(")") and step_text.count("[") == step_text.count("]"):
@@ -92,7 +95,9 @@ class StepProcessRewardModel(nn.Module):
         from src.tokenizer import get_unified_tokenizer
         try:
             enc = get_unified_tokenizer()
-        except Exception:
+        except (ImportError, RuntimeError, AttributeError) as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "PRM", f"Tokenizer initialization fallback: {e}")
             enc = None
 
         for step in steps:

@@ -58,6 +58,10 @@ class ModelArgs:
                     self.num_experts_per_tok = m.get("num_experts_per_tok", self.num_experts_per_tok)
             except Exception:
                 pass
+        else:
+            preset = self.get_preset_config("micro")
+            for k, v in preset.__dict__.items():
+                setattr(self, k, v)
 
     @classmethod
     def get_preset_config(cls, scale: str = "1t"):
@@ -180,12 +184,13 @@ class AGIInferenceEngine:
         for brain_path in possible_brains:
             if os.path.exists(brain_path):
                 try:
-                    state_dict = safetensors.torch.load_file(brain_path, device="cpu")
-                    remapped_dict = remap_state_dict(state_dict)
-                    load_result = self.model.load_state_dict(remapped_dict, strict=False)
-                    weights_loaded = True
-                    loaded_brain = brain_path
-                    break
+                    from src.weight_assimilator import SovereignWeightAssimilator
+                    assimilator = SovereignWeightAssimilator(self.model)
+                    res = assimilator.align_and_load_safetensors(brain_path)
+                    if res.get("status") == "success":
+                        weights_loaded = True
+                        loaded_brain = brain_path
+                        break
                 except Exception as e:
                     from src.telemetry import logger
                     logger.log("WARNING", "INFERENCE", f"Failed loading state dict from {brain_path}: {e}")
@@ -281,16 +286,25 @@ class AGIInferenceEngine:
         """Passes prompt through Neural Network with real-time visual streaming."""
         from src.visualizer import RealTimeStreamingVisualizer
         
+        # Enforce Prompt Injection Isolation boundary
+        formatted_prompt = prompt
+        if not ("<user_input>" in prompt or "<system>" in prompt or "Instruction:" in prompt):
+            formatted_prompt = f"<user_input>\n{prompt}\n</user_input>"
+        
         try:
-            tokens = self.enc.encode(prompt, add_special_tokens=True)
+            tokens = self.enc.encode(formatted_prompt, add_special_tokens=True)
         except TypeError:
-            tokens = self.enc.encode(prompt)
+            tokens = self.enc.encode(formatted_prompt)
         if len(tokens) > self.config.block_size - max_new_tokens:
             tokens = tokens[-(self.config.block_size - max_new_tokens):]
         max_vocab_id = self.model.graph['tok_emb'].weight.size(0) - 1
         idx = torch.tensor([tokens], dtype=torch.long).to(self.device)
         idx = torch.clamp(idx, min=0, max=max_vocab_id)
         self.model.eval()
+        
+        # Rule 25: Adaptive Task-Based Sampling Dynamics
+        is_deterministic_task = any(kw in formatted_prompt.lower() for kw in ["code", "python", "math", "calculate", "tool", "```"])
+        temperature = 0.1 if is_deterministic_task else 0.7
         
         past_key_values = None
         generated_ids = []
@@ -302,9 +316,8 @@ class AGIInferenceEngine:
                 logits, _, past_key_values = self.model(input_idx, use_cache=True, past_key_values=past_key_values)
                 logits = logits[:, -1, :]
                 
-                temperature = 0.7
-                top_k = 50
                 logits = logits / temperature
+                top_k = 50
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
                 
@@ -318,7 +331,7 @@ class AGIInferenceEngine:
                 try:
                     tok_text = self.enc.decode([idx_next.item()])
                     RealTimeStreamingVisualizer.stream_thought_token(tok_text)
-                except Exception:
+                except (UnicodeDecodeError, KeyError, ValueError):
                     pass
                 
                 if hasattr(self.enc, 'eos_token_id') and idx_next.item() == self.enc.eos_token_id:
@@ -352,9 +365,6 @@ class AGIInferenceEngine:
                 input_idx = idx[:, -1:] if past_key_values is not None else idx
                 logits, _, past_key_values = self.model(input_idx, use_cache=True, past_key_values=past_key_values)
                 logits = logits[:, -1, :] / max(temperature, 1e-5)
-                
-                v, _ = torch.topk(logits, min(50, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
                 
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 idx_next = torch.multinomial(probs, num_samples=1)

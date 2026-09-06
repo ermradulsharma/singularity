@@ -123,9 +123,11 @@ class UnrestrictedAgentReconEngine:
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return self.search_wayback_machine(url, max_chars)
-            pass
-        except Exception:
-            pass
+            from src.telemetry import logger
+            logger.log("WARNING", "RECON", f"HTTPError {e.code} while fetching {url}")
+        except Exception as e:
+            from src.telemetry import logger
+            logger.log("WARNING", "RECON", f"Failed standard page fetch for {url}: {e}")
 
         # Playwright Headless Browser fallback for dynamic Single Page Apps (React/Vue/JS-blocked)
         if len(text) < 100 and PLAYWRIGHT_AVAILABLE:
@@ -137,8 +139,9 @@ class UnrestrictedAgentReconEngine:
                     rendered_html = page.content()
                     browser.close()
                     text = self._clean_html(rendered_html)
-            except Exception:
-                pass
+            except Exception as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "RECON", f"Playwright rendering failed for {url}: {e}")
 
         if not text:
             return self.search_wayback_machine(url, max_chars)

@@ -23,7 +23,8 @@ class ConstrainedStructuredToolRouter:
     Production Constrained JSON Schema & Grammar Router.
     Parses, validates via Pydantic/JSON Schemas, and executes tools asynchronously.
     """
-    def __init__(self):
+    def __init__(self, tools_dir: Optional[str] = None):
+        self.tools_dir = tools_dir
         self.registered_schemas = self._build_tool_schemas()
 
     def _build_tool_schemas(self) -> Dict[str, Dict[str, Any]]:
@@ -262,8 +263,18 @@ class GrammarConstrainedLogitProcessor:
             return logits
             
         logits_proc = logits.clone()
-        # Invalid state transitions (e.g., control tokens outside string bounds) are masked to -inf
-        # while preserving all valid vocabulary and content token logits.
+        import torch
+        if isinstance(logits_proc, torch.Tensor):
+            # If current state expects structural tokens (e.g. key quotes or colons), mask illegal token logits
+            if self.state_tracker.state == JSONStateTracker.STATE_EXPECT_OBJECT_START:
+                # Mask all tokens that do not start with '{' or whitespace
+                mask = torch.ones_like(logits_proc, dtype=torch.bool)
+                mask[..., 123] = False  # ASCII '{' token index
+                logits_proc = logits_proc.masked_fill(mask, -float('inf'))
+            elif self.state_tracker.state == JSONStateTracker.STATE_EXPECT_COLON:
+                mask = torch.ones_like(logits_proc, dtype=torch.bool)
+                mask[..., 58] = False   # ASCII ':' token index
+                logits_proc = logits_proc.masked_fill(mask, -float('inf'))
         return logits_proc
 
 

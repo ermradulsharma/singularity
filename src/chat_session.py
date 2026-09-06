@@ -1,34 +1,38 @@
 import json
 import os
 
+from typing import List, Dict, Any, Optional
+
 class SessionManager:
     """
     Manages the short-term conversation history for Swarm Agents.
     Stores messages in a rolling JSON file to maintain context between prompts.
     """
-    def __init__(self, session_id: str = "default_session", max_history: int = 10):
-        self.session_id = session_id
-        self.max_history = max_history
-        self.history_dir = os.path.join("data", "sessions")
-        self.filepath = os.path.join(self.history_dir, f"{self.session_id}.json")
+    def __init__(self, session_id: str = "default_session", max_history: int = 10) -> None:
+        self.session_id: str = session_id
+        self.max_history: int = max_history
+        self.history_dir: str = os.path.join("data", "sessions")
+        self.filepath: str = os.path.join(self.history_dir, f"{self.session_id}.json")
         
         os.makedirs(self.history_dir, exist_ok=True)
-        self.history = self._load_history()
+        self.history: List[Dict[str, Any]] = self._load_history()
 
-    def _load_history(self) -> list:
+    def _load_history(self) -> List[Dict[str, Any]]:
         if os.path.exists(self.filepath):
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, OSError) as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "SESSION", f"Failed to load session history from {self.filepath}: {e}")
                 return []
         return []
 
-    def _save_history(self):
+    def _save_history(self) -> None:
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(self.history, f, indent=4)
 
-    def add_message(self, role: str, content: str, block_size: int = 1048576):
+    def add_message(self, role: str, content: str, block_size: int = 1048576) -> None:
         """Adds a message to history with structural user_input isolation and 90% block_size middle-context pruning."""
         formatted_content = content
         if role.lower() == "user" and not (content.startswith("<user_input>") and content.endswith("</user_input>")):
@@ -62,7 +66,7 @@ class SessionManager:
             formatted += f"[{msg['role'].upper()}]: {msg['content']}\n"
         return formatted
 
-    def clear_history(self):
+    def clear_history(self) -> None:
         """Wipes the short-term memory."""
         self.history = []
         self._save_history()

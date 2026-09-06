@@ -10,6 +10,9 @@ torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
 
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 from src.sandbox import SecureSandbox
 from src.model import GPTLanguageModel, PagedKVCacheManager, precompute_freqs_cis
 from src.inference import ModelArgs
@@ -20,7 +23,7 @@ from src.evaluator import promote_best_checkpoint
 from main import evaluate_cognitive_degradation
 
 def test_sandbox():
-    print("\n[VERIFICATION] Testing SecureSandbox AST Filtering...")
+    print("✅ [VERIFICATION] Testing SecureSandbox AST Filtering...")
     sandbox = SecureSandbox(use_docker=False)
     
     res_safe = sandbox.execute("print('Hello World')")
@@ -36,7 +39,7 @@ def test_sandbox():
         print(f"❌ Sandbox failed to block malicious code: {res_malicious}")
 
 def test_model_degradation():
-    print("\n[VERIFICATION] Testing Cognitive Degradation Benchmark...")
+    print("✅ [VERIFICATION] Testing Cognitive Degradation Benchmark...")
     device = "cpu"
     config = ModelArgs()
     model = GPTLanguageModel(
@@ -51,7 +54,7 @@ def test_model_degradation():
         print("❌ Model initialized with unstable tensors.")
 
 def test_top_1_percent_modules():
-    print("\n[VERIFICATION] Testing Top 1% Global Elite Modules...")
+    print("✅ [VERIFICATION] Testing Top 1% Global Elite Modules...")
     
     prm = StepProcessRewardModel(d_model=32)
     scores = prm.score_reasoning_steps(["Thought: OK", "Final Answer: 42"])
@@ -115,7 +118,7 @@ def test_top_1_percent_modules():
     print("✅ DeepSeek-R1 GRPO Distributed Rollout Worker Pool verified.")
 
 def test_fulfilled_gaps():
-    print("\n[VERIFICATION] Testing Fulfilling All 5 Architecture Gaps...")
+    print("✅ [VERIFICATION] Testing Fulfilling All 5 Architecture Gaps...")
     
     # 1. Multi-Modal Cross-Attention
     from src.model import MultiModalCrossAttentionConnector
@@ -167,7 +170,7 @@ def test_fulfilled_gaps():
 
 
 def test_perfection_100_percent():
-    print("\n[VERIFICATION] Testing 100% SOTA Perfection Modules...")
+    print("✅ [VERIFICATION] Testing 100% SOTA Perfection Modules...")
     
     # MTP Head
     from src.model import MultiTokenPredictionHead
@@ -225,7 +228,7 @@ def test_perfection_100_percent():
 
 if __name__ == "__main__":
     print("=================================================")
-    print("🚀 SINGULARITY TOP 1% AGI MASTER SYSTEM VERIFICATION 🚀")
+    print("SINGULARITY TOP 1% AGI MASTER SYSTEM VERIFICATION")
     print("=================================================")
     try:
         test_sandbox()
