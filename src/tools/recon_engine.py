@@ -15,7 +15,7 @@ except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
 
-def _retry_with_backoff(retries=3, backoff_in_seconds=2):
+def _retry_with_backoff(retries: int = 3, backoff_in_seconds: int = 2) -> Callable:
     """Smart Retry Decorator with Exponential Backoff"""
     def decorator(func):
         @functools.wraps(func)
@@ -47,7 +47,7 @@ class UnrestrictedAgentReconEngine:
     
     PROXIES = []
 
-    def _get_headers(self) -> dict:
+    def _get_headers(self) -> Dict[str, str]:
         """Generates random headers to bypass basic bot/anti-scraping checks."""
         return {
             'User-Agent': random.choice(self.USER_AGENTS),
@@ -55,7 +55,7 @@ class UnrestrictedAgentReconEngine:
             'Accept-Language': 'en-US,en;q=0.5'
         }
         
-    def _get_opener(self):
+    def _get_opener(self) -> urllib.request.OpenerDirector:
         """Returns a URL opener with optional proxy rotation"""
         if self.PROXIES:
             proxy = random.choice(self.PROXIES)

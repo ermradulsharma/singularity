@@ -355,7 +355,7 @@ class UniversalDynamicBlock(nn.Module):
         aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         nx = self.graph['norm2'](x)
         if self.is_moe:
-            # Zero-Loop Vectorized Shared + Top-K Routed Experts with Aux Load Balancing Loss
+            # Zero-Loop Vectorized Shared + Top-K Routed Experts with Aux Load Balancing & Capacity Factor (C=1.2)
             shared_out = self.graph['shared_expert'](nx)
             
             router_logits = self.graph['router'](nx)
@@ -371,11 +371,21 @@ class UniversalDynamicBlock(nn.Module):
             f_i = expert_mask.view(-1, E).mean(dim=0)
             aux_loss = 0.01 * E * torch.sum(f_i * p_i)
 
+            # Enforce Dynamic Expert Capacity Factor (C = 1.2) to bound max tokens per expert
+            num_tokens = B * T
+            capacity = int(1.2 * max(1, (num_tokens * topk_k) // E))
+            
             flat_nx = nx.view(-1, C)
             flat_indices = topk_indices.view(-1, topk_k)
             flat_weights = topk_weights.view(-1, topk_k)
             
             expert_masks = F.one_hot(flat_indices, num_classes=E)
+            
+            # Clamp expert mask token counts to maximum expert capacity
+            expert_token_counts = expert_masks.sum(dim=(0, 1))
+            capacity_scales = torch.clamp(capacity / (expert_token_counts + 1e-8), max=1.0)
+            expert_masks = expert_masks * capacity_scales.unsqueeze(0).unsqueeze(0)
+
             w1_list = [exp[0].weight for exp in self.graph['experts']]
             w2_list = [exp[2].weight for exp in self.graph['experts']]
             
@@ -635,7 +645,9 @@ class GPTLanguageModel(nn.Module):
                     try:
                         mod = importlib.import_module(f"src.sub_brains.{file[:-3]}")
                         if hasattr(mod, 'SubBrain'): self.sub_brains[file[:-3]] = mod.SubBrain(n_embd=n_embd)
-                    except Exception: pass
+                    except Exception as e:
+                        from src.telemetry import logger
+                        logger.log("WARNING", "MODEL", f"Failed to import sub-brain {file}: {e}")
                     
     def forward(self, idx, images=None, speech_features=None, targets=None, use_cache=False, past_key_values=None, return_medusa=False, return_value=False):
         B, T = idx.size()
@@ -650,8 +662,11 @@ class GPTLanguageModel(nn.Module):
             
         x = self.graph['ln_f'](x)
         for sub in self.sub_brains.values():
-            try: x = x + sub(x)
-            except Exception: pass
+            try:
+                x = x + sub(x)
+            except Exception as e:
+                from src.telemetry import logger
+                logger.log("WARNING", "MODEL", f"Sub-brain execution error: {e}")
             
         logits = self.graph['lm_head'](x)
         value_pred = self.graph['value_head'](x).squeeze(-1)

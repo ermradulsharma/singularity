@@ -85,8 +85,11 @@ class SecureSandbox:
             return f"[EXECUTION ERROR] {e}"
         finally:
             if os.path.exists(temp_path):
-                try: os.remove(temp_path)
-                except Exception: pass
+                try:
+                    os.remove(temp_path)
+                except OSError as e:
+                    from src.telemetry import logger
+                    logger.log("WARNING", "SANDBOX", f"Temp file cleanup failed: {e}")
 
     def _execute_docker(self, code_str: str, timeout: int, max_memory_mb: int) -> str:
         """Execute code in a non-root, immutable, networkless container."""
