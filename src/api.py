@@ -3,19 +3,22 @@ import yaml
 import torch
 import json
 import asyncio
-from typing import Optional
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
-import tiktoken
-import sys
-import safetensors.torch
+from contextlib import asynccontextmanager
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.model import GPTLanguageModel
-from src.inference import AGIInferenceEngine
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global engine, batcher
+    engine = AGIInferenceEngine(enable_fp8=False, enable_compile=False)
+    batcher = AsyncContinuousBatcher(engine)
+    batcher.start()
+    yield
 
-app = FastAPI(title="Singularity AGI High-Throughput Serving API", version="2.0", description="Production OpenAPI serving endpoint for Singularity AGI Foundation Engine")
+app = FastAPI(
+    title="Singularity AGI High-Throughput Serving API",
+    version="2.0",
+    description="Production OpenAPI serving endpoint for Singularity AGI Foundation Engine",
+    lifespan=lifespan
+)
 
 def load_config(config_path="config/config.yaml"):
     if os.path.exists(config_path):
@@ -81,13 +84,6 @@ class AsyncContinuousBatcher:
                         break
         except Exception as e:
             yield f"[ERROR]: {str(e)}"
-
-@app.on_event("startup")
-async def startup_event():
-    global engine, batcher
-    engine = AGIInferenceEngine(enable_fp8=False, enable_compile=False)
-    batcher = AsyncContinuousBatcher(engine)
-    batcher.start()
 
 class GenerateRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=8_000)
